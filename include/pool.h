@@ -73,6 +73,8 @@
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 _Static_assert(POOL_ITEM_SIZE > 0U, "POOL_ITEM_SIZE must be > 0");
 _Static_assert(POOL_MAX_SLOTS > 0U, "POOL_MAX_SLOTS must be > 0");
+_Static_assert(((size_t)POOL_ITEM_SIZE % (size_t)_Alignof(max_align_t)) == 0U,
+               "POOL_ITEM_SIZE must be a multiple of max_align_t alignment");
 _Static_assert(((size_t)POOL_MAX_SLOTS) <= (SIZE_MAX / (size_t)POOL_ITEM_SIZE),
                "POOL_MAX_SLOTS * POOL_ITEM_SIZE overflows size_t");
 _Static_assert(((size_t)POOL_MAX_SLOTS) <= (size_t)UINT16_MAX,
@@ -82,6 +84,11 @@ _Static_assert(((size_t)POOL_MAX_SLOTS) <= (size_t)UINT16_MAX,
 /* -------------------------------------------------------------------------- */
 /*                               Type Definitions                             */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * @brief Unique identifier for a slot within the pool.
+ */
+typedef uint16_t pool_id_t;
 
 /**
  * @brief Pool manager instance.
@@ -97,7 +104,7 @@ typedef union {
 struct pool_t {
         pool_storage_t storage;
         uint8_t slot_status[POOL_MAX_SLOTS];
-        uint32_t allocation_count;
+        pool_id_t next_index;
 };
 
 typedef struct pool_t *pool_handle_t;
@@ -112,11 +119,6 @@ typedef enum {
         POOL_ERR_INVALID_ID =
             -3 ///< Attempted to release an invalid or already freed slot
 } pool_status_t;
-
-/**
- * @brief Unique identifier for a slot within the pool.
- */
-typedef uint16_t pool_id_t;
 
 /* -------------------------------------------------------------------------- */
 /*                                API Functions                               */
@@ -172,15 +174,14 @@ pool_status_t pool_release(pool_handle_t p_pool, const pool_id_t id);
 /**
  * @brief Retrieves a pointer to the memory block for a specific ID.
  *
- * This function does not change state; it simply calculates the address based
- * on the provided ID. The caller is responsible for ensuring the ID is valid
- * (e.g., via prior successful pool_acquire).
+ * This function does not change state; it calculates the address based on the
+ * provided ID and returns NULL if the slot is out of range or currently free.
  *
  * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
  * NULL.
  * @param[in]  id         The ID of the slot to access.
  * @return                 Pointer to the start of the memory block, or NULL if
- * ID is out of bounds.
+ * ID is out of bounds or the slot is free.
  */
 void *pool_get_pointer(pool_handle_t p_pool, const pool_id_t id);
 

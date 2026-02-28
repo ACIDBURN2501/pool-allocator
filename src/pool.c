@@ -68,13 +68,15 @@ pool_find_free_slot(const struct pool_t *const p_pool, pool_id_t *const p_index)
         /* Determine starting point based on configuration */
         if (POOL_LOOKUP_STRATEGY == POOL_LOOKUP_HASH) {
                 /*
-                 * Hash/Round-Robin Strategy: Start searching from the last
-                 * allocation count modulo size. This distributes allocations
-                 * across the array over time, preventing wear concentration in
-                 * specific memory regions (relevant for NVM pools).
+                 * Hash/Round-Robin Strategy: Start searching from the saved
+                 * next index. This distributes allocations across the array
+                 * over time, preventing wear concentration in specific memory
+                 * regions (relevant for NVM pools).
                  */
-                start_index =
-                    (size_t)(p_pool->allocation_count % (uint32_t)max_slots);
+                start_index = (size_t)p_pool->next_index;
+                if (start_index >= max_slots) {
+                        start_index = 0U;
+                }
         } else {
                 /*
                  * Linear Strategy: Always start from index 0. This is the most
@@ -129,7 +131,7 @@ pool_init(pool_handle_t p_pool)
         }
 
         /* Reset allocation counter */
-        p_pool->allocation_count = 0U;
+        p_pool->next_index = 0U;
 
         return POOL_OK;
 }
@@ -156,8 +158,14 @@ pool_acquire(pool_handle_t p_pool, pool_id_t *const p_id)
                  * mutex if used concurrently. */
                 p_pool->slot_status[free_index] = POOL_SLOT_USED;
 
-                /* Update counter for hash-based distribution logic */
-                p_pool->allocation_count++;
+                /* Advance the next scan start index for hash strategy. */
+                {
+                        pool_id_t next = (pool_id_t)(free_index + 1U);
+                        if (next >= (pool_id_t)POOL_MAX_SLOTS) {
+                                next = 0U;
+                        }
+                        p_pool->next_index = next;
+                }
 
                 *p_id = free_index;
         }
@@ -223,6 +231,10 @@ pool_get_pointer(pool_handle_t p_pool, const pool_id_t id)
 
         /* Bounds check */
         if (id >= POOL_MAX_SLOTS) {
+                return NULL;
+        }
+
+        if (p_pool->slot_status[id] == POOL_SLOT_FREE) {
                 return NULL;
         }
 
