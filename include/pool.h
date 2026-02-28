@@ -1,0 +1,161 @@
+/**
+ * @file pool.h
+ * @brief Static Object Pool Allocator for Safety-Critical Systems
+ *
+ * This module implements a static memory pool allocator designed to comply with
+ * MISRA C:2012 and IEC 61508 standards. It prohibits dynamic memory allocation
+ * (malloc/free) in favor of pre-allocated static buffers, ensuring
+ * deterministic behavior and eliminating fragmentation risks.
+ *
+ * @copyright MIT License
+ */
+
+#ifndef POOL_H
+#define POOL_H
+
+/* -------------------------------------------------------------------------- */
+/*                                 Includes                                   */
+/* -------------------------------------------------------------------------- */
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/* -------------------------------------------------------------------------- */
+/*                               Configuration                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @def POOL_ITEM_SIZE
+ * @brief The size in bytes of each object managed by the pool.
+ *        Must be defined before including this header if not using default.
+ */
+#ifndef POOL_ITEM_SIZE
+#define POOL_ITEM_SIZE 64U
+#endif
+
+/**
+ * @def POOL_MAX_SLOTS
+ * @brief The maximum number of objects the pool can manage simultaneously.
+ *        Must be defined before including this header if not using default.
+ */
+#ifndef POOL_MAX_SLOTS
+#define POOL_MAX_SLOTS 16U
+#endif
+
+/**
+ * @def POOL_LOOKUP_STRATEGY
+ * @brief Defines the algorithm used to find a free slot during acquisition.
+ *
+ * Options:
+ *   - POOL_LOOKUP_LINEAR (0): Scans from index 0 upwards. Deterministic, O(N).
+ *   - POOL_LOOKUP_HASH   (1): Starts scan based on allocation history modulo N.
+ *                             Distributes wear more evenly across memory array.
+ */
+#ifndef POOL_LOOKUP_STRATEGY
+#define POOL_LOOKUP_STRATEGY POOL_LOOKUP_LINEAR
+#endif
+
+/* -------------------------------------------------------------------------- */
+/*                               Type Definitions                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @brief Opaque handle to the pool manager instance.
+ *
+ * Users should not access members of this struct directly. Access is managed
+ * through the API functions defined below. This enforces encapsulation and
+ * prevents accidental corruption of internal state, a key requirement for
+ * MISRA C Rule 18.2 and IEC 61508 data integrity.
+ */
+struct pool_t;
+typedef struct pool_t *pool_handle_t;
+
+/**
+ * @brief Return codes for pool operations.
+ */
+typedef enum {
+        POOL_OK = 0U,            ///< Operation completed successfully
+        POOL_ERR_NULL_PTR = -1U, ///< A provided pointer argument was NULL
+        POOL_ERR_FULL = -2U,     ///< No free slots available in the pool
+        POOL_ERR_INVALID_ID =
+            -3U ///< Attempted to release an invalid or already freed slot
+} pool_status_t;
+
+/**
+ * @brief Unique identifier for a slot within the pool.
+ */
+typedef uint8_t pool_id_t;
+
+/* -------------------------------------------------------------------------- */
+/*                                API Functions                               */
+/* -------------------------------------------------------------------------- */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief Initializes the pool manager instance.
+ *
+ * This function must be called before any other operation on the pool handle.
+ * It resets internal counters and marks all slots as free.
+ *
+ * @param[in]  p_pool     Pointer to the pool structure to initialize. Must not
+ * be NULL.
+ * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR otherwise.
+ */
+pool_status_t pool_init(pool_handle_t p_pool);
+
+/**
+ * @brief Acquires a free slot from the pool.
+ *
+ * Allocates one chunk of memory (POOL_ITEM_SIZE bytes) and returns its ID.
+ * The returned pointer is guaranteed to be aligned for standard types up to
+ * POOL_ITEM_SIZE, provided POOL_ITEM_SIZE is a multiple of alignment
+ * requirements.
+ *
+ * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
+ * NULL.
+ * @param[out] p_id       Pointer to store the ID of the acquired slot. Must not
+ * be NULL.
+ * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR or
+ * POOL_ERR_FULL otherwise.
+ */
+pool_status_t pool_acquire(pool_handle_t p_pool, pool_id_t *const p_id);
+
+/**
+ * @brief Releases a previously acquired slot back to the pool.
+ *
+ * Marks the specified slot as free for future allocation. This function
+ * includes checks to prevent double-free errors by verifying the current status
+ * of the slot.
+ *
+ * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
+ * NULL.
+ * @param[in]  id         The ID of the slot to release.
+ * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR or
+ * POOL_ERR_INVALID_ID otherwise.
+ */
+pool_status_t pool_release(pool_handle_t p_pool, const pool_id_t id);
+
+/**
+ * @brief Retrieves a pointer to the memory block for a specific ID.
+ *
+ * This function does not change state; it simply calculates the address based
+ * on the provided ID. The caller is responsible for ensuring the ID is valid
+ * (e.g., via prior successful pool_acquire).
+ *
+ * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
+ * NULL.
+ * @param[in]  id         The ID of the slot to access.
+ * @return                 Pointer to the start of the memory block, or NULL if
+ * ID is out of bounds.
+ */
+void *pool_get_pointer(pool_handle_t p_pool, const pool_id_t id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POOL_H */
