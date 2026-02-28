@@ -8,13 +8,14 @@ on:
 
 jobs:
   test:
-    name: "Test (${{ matrix.os }})"
+    name: "Test (${{ matrix.os }}, ${{ matrix.lookup_strategy }})"
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        lookup_strategy: [linear, hash]
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +40,7 @@ jobs:
           meson setup build
           --buildtype=debug
           -Dbuild_tests=true
+          -Dlookup_strategy=${{ matrix.lookup_strategy }}
 
       - name: Build
         run: meson compile -C build

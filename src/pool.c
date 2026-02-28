@@ -22,32 +22,6 @@ typedef enum {
         POOL_SLOT_USED = 1U  ///< Slot is currently allocated
 } pool_slot_status_t;
 
-/**
- * @brief Lookup strategy constants matching configuration macros.
- */
-#define POOL_LOOKUP_LINEAR 0U
-#define POOL_LOOKUP_HASH   1U
-
-/* -------------------------------------------------------------------------- */
-/*                             Internal Structs                               */
-/* -------------------------------------------------------------------------- */
-
-/**
- * @brief Internal structure for the pool manager.
- *
- * This struct is opaque to users (defined only in .c file). It contains the
- * raw memory buffer and an array of status flags to track allocation state.
- */
-struct pool_t {
-        uint8_t
-            memory_block[POOL_MAX_SLOTS
-                         * POOL_ITEM_SIZE];  ///< Static storage for all objects
-        uint8_t slot_status[POOL_MAX_SLOTS]; ///< Status flag for each slot
-                                             ///< (0=Free, 1=Used)
-        uint32_t
-            allocation_count; ///< Counter for hash-based distribution logic
-};
-
 /* -------------------------------------------------------------------------- */
 /*                             Implementation                                 */
 /* -------------------------------------------------------------------------- */
@@ -84,11 +58,12 @@ pool_validate_id_ptr(pool_id_t *const p_id)
  * @return               POOL_OK if found, POOL_ERR_FULL if none available.
  */
 static pool_status_t
-pool_find_free_slot(const struct pool_t *const p_pool, uint8_t *const p_index)
+pool_find_free_slot(const struct pool_t *const p_pool, pool_id_t *const p_index)
 {
-        uint16_t start_index = 0U;
-        uint16_t current_index = 0U;
-        uint16_t iterations = 0U;
+        size_t start_index = 0U;
+        size_t current_index = 0U;
+        size_t iterations = 0U;
+        const size_t max_slots = (size_t)POOL_MAX_SLOTS;
 
         /* Determine starting point based on configuration */
         if (POOL_LOOKUP_STRATEGY == POOL_LOOKUP_HASH) {
@@ -99,7 +74,7 @@ pool_find_free_slot(const struct pool_t *const p_pool, uint8_t *const p_index)
                  * specific memory regions (relevant for NVM pools).
                  */
                 start_index =
-                    (uint16_t)(p_pool->allocation_count % POOL_MAX_SLOTS);
+                    (size_t)(p_pool->allocation_count % (uint32_t)max_slots);
         } else {
                 /*
                  * Linear Strategy: Always start from index 0. This is the most
@@ -109,17 +84,17 @@ pool_find_free_slot(const struct pool_t *const p_pool, uint8_t *const p_index)
                 start_index = 0U;
         }
 
-        current_index = (uint16_t)start_index;
+        current_index = start_index;
 
         /* Scan loop with bounds check to prevent infinite loops on full pool */
-        while (iterations < POOL_MAX_SLOTS) {
+        while (iterations < max_slots) {
                 if (p_pool->slot_status[current_index] == POOL_SLOT_FREE) {
-                        *p_index = (uint8_t)current_index;
+                        *p_index = (pool_id_t)current_index;
                         return POOL_OK;
                 }
 
                 current_index++;
-                if (current_index >= POOL_MAX_SLOTS) {
+                if (current_index >= max_slots) {
                         current_index = 0U; /* Wrap around */
                 }
                 iterations++;
@@ -131,7 +106,7 @@ pool_find_free_slot(const struct pool_t *const p_pool, uint8_t *const p_index)
 pool_status_t
 pool_init(pool_handle_t p_pool)
 {
-        uint16_t i;
+        size_t i;
 
         if (!pool_validate_handle(p_pool)) {
                 return POOL_ERR_NULL_PTR;
@@ -145,10 +120,11 @@ pool_init(pool_handle_t p_pool)
          */
 
         /* Clear the entire memory block to ensure no garbage data exists */
-        (void)memset(p_pool->memory_block, 0x00U, sizeof(p_pool->memory_block));
+        (void)memset(p_pool->storage.bytes, 0x00U,
+                     sizeof(p_pool->storage.bytes));
 
         /* Explicitly set all slots to FREE state */
-        for (i = 0U; i < POOL_MAX_SLOTS; i++) {
+        for (i = 0U; i < (size_t)POOL_MAX_SLOTS; i++) {
                 p_pool->slot_status[i] = POOL_SLOT_FREE;
         }
 
@@ -161,7 +137,7 @@ pool_init(pool_handle_t p_pool)
 pool_status_t
 pool_acquire(pool_handle_t p_pool, pool_id_t *const p_id)
 {
-        uint8_t free_index;
+        pool_id_t free_index;
         pool_status_t status;
 
         if (!pool_validate_handle(p_pool)) {
@@ -176,9 +152,8 @@ pool_acquire(pool_handle_t p_pool, pool_id_t *const p_id)
         status = pool_find_free_slot(p_pool, &free_index);
 
         if (status == POOL_OK) {
-                /* Mark slot as used before returning ID to prevent race
-                   conditions in multi-threaded envs (though this lib is
-                   single-threaded by design for safety determinism). */
+                /* This library is not thread-safe; protect with an external
+                 * mutex if used concurrently. */
                 p_pool->slot_status[free_index] = POOL_SLOT_USED;
 
                 /* Update counter for hash-based distribution logic */
@@ -221,12 +196,17 @@ pool_release(pool_handle_t p_pool, const pool_id_t id)
          * This is a best practice in IEC 61508 safety lifecycle management.
          */
         {
-                uint32_t offset = (uint32_t)id * POOL_ITEM_SIZE;
+                const size_t block_size = sizeof(p_pool->storage.bytes);
+                const size_t offset = ((size_t)id) * ((size_t)POOL_ITEM_SIZE);
+
+                if (offset > (block_size - (size_t)POOL_ITEM_SIZE)) {
+                        return POOL_ERR_INVALID_ID;
+                }
                 /* Use volatile to prevent compiler optimization removing the
                  * clear if memory is critical */
                 volatile uint8_t *const p_mem_ptr =
-                    &p_pool->memory_block[offset];
-                for (uint16_t k = 0U; k < POOL_ITEM_SIZE; k++) {
+                    &p_pool->storage.bytes[offset];
+                for (size_t k = 0U; k < (size_t)POOL_ITEM_SIZE; k++) {
                         p_mem_ptr[k] = 0x00U;
                 }
         }
@@ -247,8 +227,43 @@ pool_get_pointer(pool_handle_t p_pool, const pool_id_t id)
         }
 
         /* Calculate address safely using offset arithmetic on uint8_t array */
-        uint32_t offset = (uint32_t)id * POOL_ITEM_SIZE;
+        const size_t block_size = sizeof(p_pool->storage.bytes);
+        const size_t offset = ((size_t)id) * ((size_t)POOL_ITEM_SIZE);
+
+        if (offset > (block_size - (size_t)POOL_ITEM_SIZE)) {
+                return NULL;
+        }
 
         /* Return void pointer to the start of the slot's memory block */
-        return &p_pool->memory_block[offset];
+        return &p_pool->storage.bytes[offset];
+}
+
+pool_status_t
+pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
+                         void **const p_ptr)
+{
+        if (!pool_validate_handle(p_pool)) {
+                return POOL_ERR_NULL_PTR;
+        }
+
+        if (p_ptr == NULL) {
+                return POOL_ERR_NULL_PTR;
+        }
+
+        if (id >= POOL_MAX_SLOTS) {
+                *p_ptr = NULL;
+                return POOL_ERR_INVALID_ID;
+        }
+
+        if (p_pool->slot_status[id] == POOL_SLOT_FREE) {
+                *p_ptr = NULL;
+                return POOL_ERR_INVALID_ID;
+        }
+
+        *p_ptr = pool_get_pointer(p_pool, id);
+        if (*p_ptr == NULL) {
+                return POOL_ERR_INVALID_ID;
+        }
+
+        return POOL_OK;
 }

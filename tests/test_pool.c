@@ -14,12 +14,10 @@
 #include <string.h>
 
 /* -------------------------------------------------------------------------
- * Test storage - pools are cast to static buffers of sufficient size
+ * Test storage
  * ------------------------------------------------------------------------- */
 
-#define TEST_POOL_SIZE (POOL_MAX_SLOTS * POOL_ITEM_SIZE)
-
-static uint8_t g_pool_storage[TEST_POOL_SIZE + 32]; /* alignment padding */
+static struct pool_t g_pool;
 
 /* -------------------------------------------------------------------------
  * Minimal test runner (no external dependencies)
@@ -46,7 +44,7 @@ static int g_tests_failed = 0;
 static pool_handle_t
 get_test_pool(void)
 {
-        return (pool_handle_t)(g_pool_storage);
+        return &g_pool;
 }
 
 /* =========================================================================
@@ -60,7 +58,7 @@ test_pool_init(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0xFFU, sizeof(g_pool_storage));
+        memset(&g_pool, 0xFFU, sizeof(g_pool));
 
         pool_status_t status = pool_init(pool);
 
@@ -68,10 +66,36 @@ test_pool_init(void)
                 return 1;
         }
 
-        for (uint8_t i = 0U; i < POOL_MAX_SLOTS; i++) {
-                uint8_t *slot_ptr = &((uint8_t *)pool)[sizeof(uint32_t) + i];
-                if (*slot_ptr != 0x00U) {
-                        return 1;
+        {
+                bool seen[POOL_MAX_SLOTS];
+                memset(seen, 0, sizeof(seen));
+
+                for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
+                        pool_id_t id = (pool_id_t)0xFFFFU;
+                        if (pool_acquire(pool, &id) != POOL_OK) {
+                                return 1;
+                        }
+                        if (id >= (pool_id_t)POOL_MAX_SLOTS) {
+                                return 1;
+                        }
+                        if (seen[id]) {
+                                return 1;
+                        }
+                        seen[id] = true;
+
+                        uint8_t *ptr = (uint8_t *)pool_get_pointer(pool, id);
+                        if (ptr == NULL) {
+                                return 1;
+                        }
+                        if (ptr[0] != 0x00U) {
+                                return 1;
+                        }
+                }
+
+                for (pool_id_t id = 0U; id < (pool_id_t)POOL_MAX_SLOTS; id++) {
+                        if (pool_release(pool, id) != POOL_OK) {
+                                return 1;
+                        }
                 }
         }
 
@@ -93,7 +117,7 @@ test_pool_acquire_success(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0x55U, sizeof(g_pool_storage));
+        memset(&g_pool, 0x55U, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -135,7 +159,7 @@ test_pool_acquire_null_id(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0U, sizeof(g_pool_storage));
+        memset(&g_pool, 0U, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -150,14 +174,14 @@ test_pool_acquire_full_pool(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0U, sizeof(g_pool_storage));
+        memset(&g_pool, 0U, sizeof(g_pool));
 
         pool_init(pool);
 
         pool_id_t ids[POOL_MAX_SLOTS];
-        uint8_t acquired_count = 0U;
+        pool_id_t acquired_count = 0U;
 
-        for (uint8_t i = 0U; i < POOL_MAX_SLOTS; i++) {
+        for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
                 if (pool_acquire(pool, &ids[i]) == POOL_OK) {
                         acquired_count++;
                 } else {
@@ -165,7 +189,7 @@ test_pool_acquire_full_pool(void)
                 }
         }
 
-        if (acquired_count != POOL_MAX_SLOTS) {
+        if (acquired_count != (pool_id_t)POOL_MAX_SLOTS) {
                 return 1;
         }
 
@@ -185,12 +209,21 @@ test_pool_release_success(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0U, sizeof(g_pool_storage));
+        memset(&g_pool, 0U, sizeof(g_pool));
 
         pool_init(pool);
 
-        pool_id_t id = (pool_id_t)5U;
-        pool_acquire(pool, &id);
+        pool_id_t ids[POOL_MAX_SLOTS];
+
+        for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
+                if (pool_acquire(pool, &ids[i]) != POOL_OK) {
+                        return 1;
+                }
+        }
+
+        /* Pool is full; freeing one slot means the next acquire must return it
+         */
+        pool_id_t id = ids[(pool_id_t)(POOL_MAX_SLOTS / 2U)];
 
         pool_status_t status = pool_release(pool, id);
 
@@ -198,10 +231,14 @@ test_pool_release_success(void)
                 return 1;
         }
 
-        pool_id_t reused_id = (pool_id_t)0xFFU;
+        pool_id_t reused_id = (pool_id_t)0xFFFFU;
         status = pool_acquire(pool, &reused_id);
 
-        if (status != POOL_OK || reused_id != id) {
+        if (status != POOL_OK) {
+                return 1;
+        }
+
+        if (reused_id != id) {
                 return 1;
         }
 
@@ -214,19 +251,20 @@ test_pool_release_invalid_id(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0U, sizeof(g_pool_storage));
+        memset(&g_pool, 0U, sizeof(g_pool));
 
         pool_init(pool);
 
         pool_status_t status;
 
-        status = pool_release(pool, POOL_MAX_SLOTS);
+        status = pool_release(pool, (pool_id_t)POOL_MAX_SLOTS);
 
         if (status != POOL_ERR_INVALID_ID) {
                 return 1;
         }
 
-        status = pool_release(pool, (POOL_MAX_SLOTS + 5U));
+        status =
+            pool_release(pool, (pool_id_t)((pool_id_t)POOL_MAX_SLOTS + 5U));
 
         if (status != POOL_ERR_INVALID_ID) {
                 return 1;
@@ -241,7 +279,7 @@ test_pool_double_free(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0U, sizeof(g_pool_storage));
+        memset(&g_pool, 0U, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -261,15 +299,16 @@ test_pool_get_pointer_invalid_id(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(g_pool_storage, 0U, sizeof(g_pool_storage));
+        memset(&g_pool, 0U, sizeof(g_pool));
 
         pool_init(pool);
 
-        if (pool_get_pointer(pool, POOL_MAX_SLOTS) != NULL) {
+        if (pool_get_pointer(pool, (pool_id_t)POOL_MAX_SLOTS) != NULL) {
                 return 1;
         }
 
-        if (pool_get_pointer(pool, 0xFFU) != NULL) {
+        if (pool_get_pointer(pool, (pool_id_t)((pool_id_t)POOL_MAX_SLOTS + 1U))
+            != NULL) {
                 return 1;
         }
 
@@ -277,7 +316,52 @@ test_pool_get_pointer_invalid_id(void)
                 return 1;
         }
 
-        if (pool_get_pointer(pool, POOL_MAX_SLOTS + 10U) != NULL) {
+        if (pool_get_pointer(pool, (pool_id_t)((pool_id_t)POOL_MAX_SLOTS + 10U))
+            != NULL) {
+                return 1;
+        }
+
+        return 0;
+}
+
+/** Test 11: Verify checked pointer accessor enforces allocation state */
+static int
+test_pool_get_pointer_checked(void)
+{
+        pool_handle_t pool = get_test_pool();
+
+        memset(&g_pool, 0U, sizeof(g_pool));
+        pool_init(pool);
+
+        void *ptr = (void *)0x1;
+        if (pool_get_pointer_checked(pool, 0U, &ptr) != POOL_ERR_INVALID_ID) {
+                return 1;
+        }
+        if (ptr != NULL) {
+                return 1;
+        }
+
+        pool_id_t id = 0U;
+        if (pool_acquire(pool, &id) != POOL_OK) {
+                return 1;
+        }
+
+        if (pool_get_pointer_checked(pool, id, &ptr) != POOL_OK) {
+                return 1;
+        }
+        if (ptr == NULL) {
+                return 1;
+        }
+
+        if (pool_release(pool, id) != POOL_OK) {
+                return 1;
+        }
+
+        ptr = (void *)0x1;
+        if (pool_get_pointer_checked(pool, id, &ptr) != POOL_ERR_INVALID_ID) {
+                return 1;
+        }
+        if (ptr != NULL) {
                 return 1;
         }
 
@@ -291,7 +375,7 @@ test_pool_get_pointer_invalid_id(void)
 int
 main(void)
 {
-        printf("Running %d unit tests...\n\n", 10);
+        printf("Running %d unit tests...\n\n", 11);
 
         RUN_TEST(test_pool_init);
         RUN_TEST(test_pool_init_null_ptr);
@@ -303,6 +387,7 @@ main(void)
         RUN_TEST(test_pool_release_invalid_id);
         RUN_TEST(test_pool_double_free);
         RUN_TEST(test_pool_get_pointer_invalid_id);
+        RUN_TEST(test_pool_get_pointer_checked);
 
         printf("\n%d/%d tests passed.\n", g_tests_run - g_tests_failed,
                g_tests_run);

@@ -54,8 +54,6 @@ pool_lib = static_library('pool', pool_src,
 #include <stdio.h>
 #include "pool.h"
 
-uint8_t memory_pool[POOL_MAX_SLOTS * POOL_ITEM_SIZE];
-
 int main(void)
 {
         struct pool_t      pool;
@@ -125,4 +123,7 @@ meson test -C build
 | **Thread safety** | Not thread-safe. Protect pool handles with an external mutex. |
 | **Double-free protection** | `pool_release()` verifies slot state before freeing; returns `POOL_ERR_INVALID_ID` on double-free attempts. |
 | **WCET** | Worst-case allocation scan equals `POOL_MAX_SLOTS` iterations. Bounded and deterministic. |
-| **Pointer alignment** | Returned pointers are byte-aligned; ensure `POOL_ITEM_SIZE` is a multiple of your target's strictest alignment requirement. |
+| **Pointer alignment** | Base storage is aligned to `max_align_t`; ensure `POOL_ITEM_SIZE` is a multiple of your target's strictest alignment requirement so every slot stays aligned. |
+
+For a checked pointer accessor that enforces allocation state, use
+`pool_get_pointer_checked()`.

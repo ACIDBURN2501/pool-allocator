@@ -43,6 +43,16 @@
 #define POOL_MAX_SLOTS 16U
 #endif
 
+/* -------------------------------------------------------------------------- */
+/*                         Lookup Strategy Constants */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @brief Lookup strategy constants.
+ */
+#define POOL_LOOKUP_LINEAR 0U
+#define POOL_LOOKUP_HASH   1U
+
 /**
  * @def POOL_LOOKUP_STRATEGY
  * @brief Defines the algorithm used to find a free slot during acquisition.
@@ -57,35 +67,56 @@
 #endif
 
 /* -------------------------------------------------------------------------- */
+/*                         Compile-Time Configuration */
+/* -------------------------------------------------------------------------- */
+
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+_Static_assert(POOL_ITEM_SIZE > 0U, "POOL_ITEM_SIZE must be > 0");
+_Static_assert(POOL_MAX_SLOTS > 0U, "POOL_MAX_SLOTS must be > 0");
+_Static_assert(((size_t)POOL_MAX_SLOTS) <= (SIZE_MAX / (size_t)POOL_ITEM_SIZE),
+               "POOL_MAX_SLOTS * POOL_ITEM_SIZE overflows size_t");
+_Static_assert(((size_t)POOL_MAX_SLOTS) <= (size_t)UINT16_MAX,
+               "POOL_MAX_SLOTS must fit in uint16_t");
+#endif
+
+/* -------------------------------------------------------------------------- */
 /*                               Type Definitions                             */
 /* -------------------------------------------------------------------------- */
 
 /**
- * @brief Opaque handle to the pool manager instance.
+ * @brief Pool manager instance.
  *
- * Users should not access members of this struct directly. Access is managed
- * through the API functions defined below. This enforces encapsulation and
- * prevents accidental corruption of internal state, a key requirement for
- * MISRA C Rule 18.2 and IEC 61508 data integrity.
+ * The pool is intended to be allocated by the user (e.g., as a static or stack
+ * variable) and initialized with pool_init(). Do not modify members directly.
  */
-struct pool_t;
+typedef union {
+        max_align_t align;
+        uint8_t bytes[POOL_MAX_SLOTS * POOL_ITEM_SIZE];
+} pool_storage_t;
+
+struct pool_t {
+        pool_storage_t storage;
+        uint8_t slot_status[POOL_MAX_SLOTS];
+        uint32_t allocation_count;
+};
+
 typedef struct pool_t *pool_handle_t;
 
 /**
  * @brief Return codes for pool operations.
  */
 typedef enum {
-        POOL_OK = 0U,            ///< Operation completed successfully
-        POOL_ERR_NULL_PTR = -1U, ///< A provided pointer argument was NULL
-        POOL_ERR_FULL = -2U,     ///< No free slots available in the pool
+        POOL_OK = 0,            ///< Operation completed successfully
+        POOL_ERR_NULL_PTR = -1, ///< A provided pointer argument was NULL
+        POOL_ERR_FULL = -2,     ///< No free slots available in the pool
         POOL_ERR_INVALID_ID =
-            -3U ///< Attempted to release an invalid or already freed slot
+            -3 ///< Attempted to release an invalid or already freed slot
 } pool_status_t;
 
 /**
  * @brief Unique identifier for a slot within the pool.
  */
-typedef uint8_t pool_id_t;
+typedef uint16_t pool_id_t;
 
 /* -------------------------------------------------------------------------- */
 /*                                API Functions                               */
@@ -111,9 +142,8 @@ pool_status_t pool_init(pool_handle_t p_pool);
  * @brief Acquires a free slot from the pool.
  *
  * Allocates one chunk of memory (POOL_ITEM_SIZE bytes) and returns its ID.
- * The returned pointer is guaranteed to be aligned for standard types up to
- * POOL_ITEM_SIZE, provided POOL_ITEM_SIZE is a multiple of alignment
- * requirements.
+ * The first slot is aligned to at least alignof(max_align_t). All slots are
+ * equally aligned if POOL_ITEM_SIZE is a multiple of alignof(max_align_t).
  *
  * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
  * NULL.
@@ -153,6 +183,22 @@ pool_status_t pool_release(pool_handle_t p_pool, const pool_id_t id);
  * ID is out of bounds.
  */
 void *pool_get_pointer(pool_handle_t p_pool, const pool_id_t id);
+
+/**
+ * @brief Retrieves a pointer to the memory block for a specific ID (checked).
+ *
+ * Validates that the ID is in range and currently allocated.
+ *
+ * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
+ * NULL.
+ * @param[in]  id         The ID of the slot to access.
+ * @param[out] p_ptr      Receives pointer to the start of the memory block.
+ * Must not be NULL.
+ * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR or
+ * POOL_ERR_INVALID_ID otherwise.
+ */
+pool_status_t pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
+                                       void **const p_ptr);
 
 #ifdef __cplusplus
 }
