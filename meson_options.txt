@@ -1,0 +1,14 @@
+option(
+        'build_tests',
+        type        : 'boolean',
+        value       : true,
+        description : 'Build the unit test suite',
+)
+
+option(
+        'lookup_strategy',
+        type        : 'combo',
+        choices     : ['linear', 'hash'],
+        value       : 'linear',
+        description : 'Slot lookup strategy: linear scan or hash-based round-robin',
+)
