@@ -79,6 +79,9 @@ _Static_assert(((size_t)POOL_MAX_SLOTS) <= (SIZE_MAX / (size_t)POOL_ITEM_SIZE),
                "POOL_MAX_SLOTS * POOL_ITEM_SIZE overflows size_t");
 _Static_assert(((size_t)POOL_MAX_SLOTS) <= (size_t)UINT16_MAX,
                "POOL_MAX_SLOTS must fit in uint16_t");
+_Static_assert((POOL_LOOKUP_STRATEGY == POOL_LOOKUP_LINEAR)
+                   || (POOL_LOOKUP_STRATEGY == POOL_LOOKUP_HASH),
+               "POOL_LOOKUP_STRATEGY must be either LINEAR or HASH");
 #endif
 
 /* -------------------------------------------------------------------------- */

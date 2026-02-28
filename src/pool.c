@@ -186,12 +186,12 @@ pool_release(pool_handle_t p_pool, const pool_id_t id)
         }
 
         /*
-         * Safety Check: Prevent Double Free.
-         * If the slot is already FREE, this is an error condition.
-         * In a safety-critical system, we must not silently accept invalid
-         * operations.
+         * Safety Check: Prevent Double Free and Invalid State Access.
+         * If the slot is not explicitly marked as USED, this is an error
+         * condition. This catches both double-free and uninitialized garbage
+         * states.
          */
-        if (p_pool->slot_status[id] == POOL_SLOT_FREE) {
+        if (p_pool->slot_status[id] != POOL_SLOT_USED) {
                 return POOL_ERR_INVALID_ID;
         }
 
@@ -234,7 +234,7 @@ pool_get_pointer(pool_handle_t p_pool, const pool_id_t id)
                 return NULL;
         }
 
-        if (p_pool->slot_status[id] == POOL_SLOT_FREE) {
+        if (p_pool->slot_status[id] != POOL_SLOT_USED) {
                 return NULL;
         }
 
@@ -263,11 +263,6 @@ pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
         }
 
         if (id >= POOL_MAX_SLOTS) {
-                *p_ptr = NULL;
-                return POOL_ERR_INVALID_ID;
-        }
-
-        if (p_pool->slot_status[id] == POOL_SLOT_FREE) {
                 *p_ptr = NULL;
                 return POOL_ERR_INVALID_ID;
         }

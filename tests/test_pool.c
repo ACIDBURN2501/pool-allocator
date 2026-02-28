@@ -368,6 +368,37 @@ test_pool_get_pointer_checked(void)
         return 0;
 }
 
+/** Test 12: Verify operations fail on uninitialized pool with garbage state */
+static int
+test_pool_uninitialized_garbage(void)
+{
+        pool_handle_t pool = get_test_pool();
+
+        /* Fill with garbage (not 0 or 1) */
+        memset(&g_pool, 0xAAU, sizeof(g_pool));
+
+        /* pool_release should fail */
+        if (pool_release(pool, 0U) != POOL_ERR_INVALID_ID) {
+                return 1;
+        }
+
+        /* pool_get_pointer should fail */
+        if (pool_get_pointer(pool, 0U) != NULL) {
+                return 1;
+        }
+
+        /* pool_get_pointer_checked should fail */
+        void *ptr = (void *)0x1;
+        if (pool_get_pointer_checked(pool, 0U, &ptr) != POOL_ERR_INVALID_ID) {
+                return 1;
+        }
+        if (ptr != NULL) {
+                return 1;
+        }
+
+        return 0;
+}
+
 /* =========================================================================
  * Entry point
  * ========================================================================= */
@@ -375,7 +406,7 @@ test_pool_get_pointer_checked(void)
 int
 main(void)
 {
-        printf("Running %d unit tests...\n\n", 11);
+        printf("Running %d unit tests...\n\n", 12);
 
         RUN_TEST(test_pool_init);
         RUN_TEST(test_pool_init_null_ptr);
@@ -388,6 +419,7 @@ main(void)
         RUN_TEST(test_pool_double_free);
         RUN_TEST(test_pool_get_pointer_invalid_id);
         RUN_TEST(test_pool_get_pointer_checked);
+        RUN_TEST(test_pool_uninitialized_garbage);
 
         printf("\n%d/%d tests passed.\n", g_tests_run - g_tests_failed,
                g_tests_run);
