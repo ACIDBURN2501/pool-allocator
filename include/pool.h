@@ -2,10 +2,14 @@
  * @file pool.h
  * @brief Static Object Pool Allocator for Safety-Critical Systems
  *
- * This module implements a static memory pool allocator designed to comply with
- * MISRA C:2012 and IEC 61508 standards. It prohibits dynamic memory allocation
- * (malloc/free) in favor of pre-allocated static buffers, ensuring
- * deterministic behavior and eliminating fragmentation risks.
+ * This module implements a static memory pool allocator designed to be
+ * compliance-ready for MISRA C:2012 and IEC 61508 standards. It prohibits
+ * dynamic memory allocation (malloc/free) in favor of pre-allocated static
+ * buffers, ensuring deterministic behavior and eliminating fragmentation risks.
+ *
+ * @note This library is not thread-safe. Synchronization (e.g., mutexes or
+ *       interrupt disabling) is the responsibility of the caller if the pool
+ *       is accessed from multiple execution contexts.
  *
  * @copyright MIT License
  */

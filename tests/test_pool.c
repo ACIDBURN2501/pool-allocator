@@ -399,14 +399,110 @@ test_pool_uninitialized_garbage(void)
         return 0;
 }
 
+/** Test 13: Verify pointer alignment for all slots */
+static int
+test_pool_alignment(void)
+{
+        pool_handle_t pool = get_test_pool();
+        pool_init(pool);
+
+        for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
+                pool_id_t id;
+                if (pool_acquire(pool, &id) != POOL_OK) {
+                        return 1;
+                }
+
+                void *ptr = pool_get_pointer(pool, id);
+                if (((uintptr_t)ptr % (uintptr_t)_Alignof(max_align_t)) != 0U) {
+                        return 1;
+                }
+        }
+
+        return 0;
+}
+
+/** Test 14: Verify pool_release clears the entire item memory */
+static int
+test_pool_release_clears_memory(void)
+{
+        pool_handle_t pool = get_test_pool();
+        pool_init(pool);
+
+        pool_id_t id;
+        pool_acquire(pool, &id);
+        uint8_t *ptr = (uint8_t *)pool_get_pointer(pool, id);
+
+        /* Fill with non-zero data */
+        memset(ptr, 0xA5U, POOL_ITEM_SIZE);
+
+        if (pool_release(pool, id) != POOL_OK) {
+                return 1;
+        }
+
+        /* Accessing the pointer after release is technically UB if the pool
+         * were dynamic, but here we are checking the static storage directly
+         * via the internal knowledge of where that ID mapped. */
+        for (size_t i = 0U; i < (size_t)POOL_ITEM_SIZE; i++) {
+                if (ptr[i] != 0x00U) {
+                        return 1;
+                }
+        }
+
+        return 0;
+}
+
+/** Test 15: Verify no overlap between adjacent slots */
+static int
+test_pool_no_overlap(void)
+{
+        pool_handle_t pool = get_test_pool();
+        pool_init(pool);
+
+        uint8_t *ptrs[POOL_MAX_SLOTS];
+
+        for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
+                pool_id_t id;
+                pool_acquire(pool, &id);
+                ptrs[i] = (uint8_t *)pool_get_pointer(pool, id);
+                /* Initialize memory with a unique value per slot */
+                memset(ptrs[i], (int)i + 1, POOL_ITEM_SIZE);
+        }
+
+        /* Verify no slot was corrupted by another's initialization */
+        for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
+                for (size_t j = 0U; j < (size_t)POOL_ITEM_SIZE; j++) {
+                        if (ptrs[i][j] != (uint8_t)(i + 1U)) {
+                                return 1;
+                        }
+                }
+        }
+
+        /* Verify pointer distance */
+        for (pool_id_t i = 0U; i < (pool_id_t)(POOL_MAX_SLOTS - 1U); i++) {
+                for (pool_id_t k = (pool_id_t)(i + 1U);
+                     k < (pool_id_t)POOL_MAX_SLOTS; k++) {
+                        uintptr_t p1 = (uintptr_t)ptrs[i];
+                        uintptr_t p2 = (uintptr_t)ptrs[k];
+                        uintptr_t diff = (p1 > p2) ? (p1 - p2) : (p2 - p1);
+
+                        if (diff < (uintptr_t)POOL_ITEM_SIZE) {
+                                return 1;
+                        }
+                }
+        }
+
+        return 0;
+}
+
 /* =========================================================================
+
  * Entry point
  * ========================================================================= */
 
 int
 main(void)
 {
-        printf("Running %d unit tests...\n\n", 12);
+        printf("Running %d unit tests...\n\n", 15);
 
         RUN_TEST(test_pool_init);
         RUN_TEST(test_pool_init_null_ptr);
@@ -420,6 +516,9 @@ main(void)
         RUN_TEST(test_pool_get_pointer_invalid_id);
         RUN_TEST(test_pool_get_pointer_checked);
         RUN_TEST(test_pool_uninitialized_garbage);
+        RUN_TEST(test_pool_alignment);
+        RUN_TEST(test_pool_release_clears_memory);
+        RUN_TEST(test_pool_no_overlap);
 
         printf("\n%d/%d tests passed.\n", g_tests_run - g_tests_failed,
                g_tests_run);

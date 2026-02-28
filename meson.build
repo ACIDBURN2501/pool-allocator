@@ -1,5 +1,5 @@
 project('so_pool_allocator', 'c',
-  version: '1.0.2',
+  version: '1.0.3',
   license: 'MIT',
   default_options: ['warning_level=3']
 )

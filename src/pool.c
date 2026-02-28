@@ -195,13 +195,14 @@ pool_release(pool_handle_t p_pool, const pool_id_t id)
                 return POOL_ERR_INVALID_ID;
         }
 
-        /* Mark slot as free */
-        p_pool->slot_status[id] = POOL_SLOT_FREE;
-
         /*
          * Optional: Clear memory block content for security/safety to prevent
          * information leakage if this pool holds sensitive data.
          * This is a best practice in IEC 61508 safety lifecycle management.
+         *
+         * Note: We clear memory BEFORE marking the slot as free. This ensures
+         * that if a higher-priority context (e.g., ISR) interrupts and acquires
+         * this slot, it won't have its data wiped by the resuming release.
          */
         {
                 const size_t block_size = sizeof(p_pool->storage.bytes);
@@ -218,6 +219,10 @@ pool_release(pool_handle_t p_pool, const pool_id_t id)
                         p_mem_ptr[k] = 0x00U;
                 }
         }
+
+        /* Mark slot as free (Last step for thread/ISR safety window reduction)
+         */
+        p_pool->slot_status[id] = POOL_SLOT_FREE;
 
         return POOL_OK;
 }
