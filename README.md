@@ -1,4 +1,4 @@
-# pool
+# pool-allocator
 
 [![CI](https://github.com/ACIDBURN2501/pool_allocator/actions/workflows/ci.yml/badge.svg)](https://github.com/ACIDBURN2501/pool_allocator/actions/workflows/ci.yml)
 
