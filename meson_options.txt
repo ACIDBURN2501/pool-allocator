@@ -12,3 +12,19 @@ option(
         value       : 'linear',
         description : 'Slot lookup strategy: linear scan or hash-based round-robin',
 )
+
+option(
+        'pool_max_slots',
+        type        : 'integer',
+        value       : 16,
+        min         : 1,
+        description : 'Maximum number of pool slots (POOL_MAX_SLOTS)',
+)
+
+option(
+        'pool_item_size',
+        type        : 'integer',
+        value       : 64,
+        min         : 1,
+        description : 'Size in bytes of each pool slot (POOL_ITEM_SIZE)',
+)
