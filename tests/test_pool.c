@@ -48,8 +48,7 @@ get_test_pool(void)
 }
 
 /* =========================================================================
- * Test Cases - 10 comprehensive tests covering all aspects of operation
- * and safety
+ * Test Cases - cover all aspects of operation and safety
  * ========================================================================= */
 
 /** Test 1: Verify initialization clears state and marks slots free */
@@ -58,7 +57,7 @@ test_pool_init(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0xFFU, sizeof(g_pool));
+        memset(&g_pool, 0xFF, sizeof(g_pool));
 
         pool_status_t status = pool_init(pool);
 
@@ -83,11 +82,12 @@ test_pool_init(void)
                         }
                         seen[id] = true;
 
-                        uint8_t *ptr = (uint8_t *)pool_get_pointer(pool, id);
+                        pool_byte_t *ptr =
+                            (pool_byte_t *)pool_get_pointer(pool, id);
                         if (ptr == NULL) {
                                 return 1;
                         }
-                        if (ptr[0] != 0x00U) {
+                        if (ptr[0] != (pool_byte_t)0x00) {
                                 return 1;
                         }
                 }
@@ -117,7 +117,7 @@ test_pool_acquire_success(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0x55U, sizeof(g_pool));
+        memset(&g_pool, 0x55, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -128,15 +128,24 @@ test_pool_acquire_success(void)
                 return 1;
         }
 
-        void *ptr = pool_get_pointer(pool, id);
+        pool_byte_t *ptr = (pool_byte_t *)pool_get_pointer(pool, id);
 
         if (ptr == NULL) {
                 return 1;
         }
 
-        memset(ptr, 0xAAU, POOL_ITEM_SIZE);
+        /*
+         * Per-element fill keeps the test source identical across 8-bit
+         * and 16-bit MAU targets. A memset(...,POOL_ITEM_SIZE) would
+         * write byte-units regardless of the underlying pool_byte_t
+         * width and produce different per-element values on the two
+         * paths.
+         */
+        for (size_t i = 0U; i < (size_t)POOL_ITEM_SIZE; i++) {
+                ptr[i] = (pool_byte_t)0xAA;
+        }
 
-        if (((uint8_t *)ptr)[0] != 0xAAU) {
+        if (ptr[0] != (pool_byte_t)0xAA) {
                 return 1;
         }
 
@@ -159,7 +168,7 @@ test_pool_acquire_null_id(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -174,7 +183,7 @@ test_pool_acquire_full_pool(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -209,7 +218,7 @@ test_pool_release_success(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -251,7 +260,7 @@ test_pool_release_invalid_id(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -279,7 +288,7 @@ test_pool_double_free(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -299,7 +308,7 @@ test_pool_get_pointer_invalid_id(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
 
         pool_init(pool);
 
@@ -330,7 +339,7 @@ test_pool_get_pointer_checked(void)
 {
         pool_handle_t pool = get_test_pool();
 
-        memset(&g_pool, 0U, sizeof(g_pool));
+        memset(&g_pool, 0, sizeof(g_pool));
         pool_init(pool);
 
         void *ptr = (void *)0x1;
@@ -375,7 +384,7 @@ test_pool_uninitialized_garbage(void)
         pool_handle_t pool = get_test_pool();
 
         /* Fill with garbage (not 0 or 1) */
-        memset(&g_pool, 0xAAU, sizeof(g_pool));
+        memset(&g_pool, 0xAA, sizeof(g_pool));
 
         /* pool_release should fail */
         if (pool_release(pool, 0U) != POOL_ERR_INVALID_ID) {
@@ -413,7 +422,8 @@ test_pool_alignment(void)
                 }
 
                 void *ptr = pool_get_pointer(pool, id);
-                if (((uintptr_t)ptr % (uintptr_t)_Alignof(max_align_t)) != 0U) {
+                if (((uintptr_t)ptr % (uintptr_t)_Alignof(pool_align_t))
+                    != 0U) {
                         return 1;
                 }
         }
@@ -430,10 +440,17 @@ test_pool_release_clears_memory(void)
 
         pool_id_t id;
         pool_acquire(pool, &id);
-        uint8_t *ptr = (uint8_t *)pool_get_pointer(pool, id);
+        pool_byte_t *ptr = (pool_byte_t *)pool_get_pointer(pool, id);
 
-        /* Fill with non-zero data */
-        memset(ptr, 0xA5U, POOL_ITEM_SIZE);
+        /*
+         * Fill with non-zero pool_byte_t units. Per-element assignment
+         * works correctly on both 8-bit and 16-bit MAU targets; a
+         * memset would write byte-units and only half-fill the slot in
+         * the 16-bit case.
+         */
+        for (size_t i = 0U; i < (size_t)POOL_ITEM_SIZE; i++) {
+                ptr[i] = (pool_byte_t)0xA5;
+        }
 
         if (pool_release(pool, id) != POOL_OK) {
                 return 1;
@@ -443,7 +460,7 @@ test_pool_release_clears_memory(void)
          * were dynamic, but here we are checking the static storage directly
          * via the internal knowledge of where that ID mapped. */
         for (size_t i = 0U; i < (size_t)POOL_ITEM_SIZE; i++) {
-                if (ptr[i] != 0x00U) {
+                if (ptr[i] != (pool_byte_t)0x00) {
                         return 1;
                 }
         }
@@ -458,20 +475,26 @@ test_pool_no_overlap(void)
         pool_handle_t pool = get_test_pool();
         pool_init(pool);
 
-        uint8_t *ptrs[POOL_MAX_SLOTS];
+        pool_byte_t *ptrs[POOL_MAX_SLOTS];
 
         for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
                 pool_id_t id;
                 pool_acquire(pool, &id);
-                ptrs[i] = (uint8_t *)pool_get_pointer(pool, id);
-                /* Initialize memory with a unique value per slot */
-                memset(ptrs[i], (int)i + 1, POOL_ITEM_SIZE);
+                ptrs[i] = (pool_byte_t *)pool_get_pointer(pool, id);
+                /*
+                 * Per-element fill: a memset(...,POOL_ITEM_SIZE) would
+                 * be byte-oriented and fill differently on 8-bit vs
+                 * 16-bit MAU targets.
+                 */
+                for (size_t j = 0U; j < (size_t)POOL_ITEM_SIZE; j++) {
+                        ptrs[i][j] = (pool_byte_t)(i + 1U);
+                }
         }
 
         /* Verify no slot was corrupted by another's initialization */
         for (pool_id_t i = 0U; i < (pool_id_t)POOL_MAX_SLOTS; i++) {
                 for (size_t j = 0U; j < (size_t)POOL_ITEM_SIZE; j++) {
-                        if (ptrs[i][j] != (uint8_t)(i + 1U)) {
+                        if (ptrs[i][j] != (pool_byte_t)(i + 1U)) {
                                 return 1;
                         }
                 }
@@ -495,7 +518,6 @@ test_pool_no_overlap(void)
 }
 
 /* =========================================================================
-
  * Entry point
  * ========================================================================= */
 

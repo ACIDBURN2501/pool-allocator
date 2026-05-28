@@ -1,61 +1,88 @@
 /**
  * @file pool.c
- * @brief Implementation of the Static Object Pool Allocator
+ * @brief Implementation of the static object pool allocator.
  *
- * This file contains the internal logic for memory management. It adheres to
- * MISRA C guidelines regarding pointer arithmetic, initialization, and error
- * handling.
+ * @details
+ *    See @c pool.h for the public contract, the threading model, and
+ *    the MISRA C:2023 / IEC 61508 awareness notes. This translation
+ *    unit holds only the internal slot bookkeeping and the find /
+ *    acquire / release machinery.
+ *
+ * @par MISRA C:2023 Deviation Record
+ *
+ *    Deviations are intentional and have been reviewed. Each site is
+ *    also tagged in-line at point-of-use (search for "MISRA <rule>").
+ *
+ *    Rule 15.5 (advisory) - A function should have a single point of
+ *                            exit at its end.
+ *      Sites:        pool_init, pool_acquire, pool_release,
+ *                    pool_get_pointer, pool_get_pointer_checked,
+ *                    pool_find_free_slot, pool_validate_handle,
+ *                    pool_validate_id_ptr.
+ *      Justification: Early-return-on-error guard clauses are the
+ *                    project's idiomatic control flow. Refactoring to
+ *                    a single-exit pattern would either deeply nest
+ *                    the validation arms (hurting readability) or
+ *                    introduce a goto-cleanup (Rule 15.1 deviation),
+ *                    trading one advisory deviation for another with
+ *                    no readability gain.
+ *      Mitigation:   All exit points return one of the documented
+ *                    @c pool_status_t codes (or @c NULL for the
+ *                    pointer accessor). Every guard-clause path is
+ *                    exercised by @c tests/test_pool.c (NULL handle,
+ *                    NULL ID pointer, out-of-range ID, not-USED
+ *                    slot, full pool, double-free, uninitialised
+ *                    garbage state).
+ *
+ *    Note on defensive bounds checks:
+ *      @c pool_release and @c pool_get_pointer each contain an
+ *      @c offset > (block_size - POOL_ITEM_SIZE) check after the
+ *      @c id >= POOL_MAX_SLOTS guard. cppcheck (correctly) flags the
+ *      inner check as redundant because the prior guard proves the
+ *      condition is unreachable. The check is kept for IEC 61508
+ *      defensive coding posture and is silenced with an inline
+ *      @c cppcheck-suppress at the site.
  */
 
 #include "pool.h"
-#include <string.h> /* For memset */
+
+#include <string.h> /* memset */
 
 /* -------------------------------------------------------------------------- */
-/*                             Internal Definitions                           */
+/*                             Internal definitions                           */
 /* -------------------------------------------------------------------------- */
 
 /**
  * @brief Status flags for individual slots within the pool.
  */
 typedef enum {
-        POOL_SLOT_FREE = 0U, ///< Slot is available for allocation
-        POOL_SLOT_USED = 1U  ///< Slot is currently allocated
+        POOL_SLOT_FREE = 0U, /**< Slot is available for allocation */
+        POOL_SLOT_USED = 1U  /**< Slot is currently allocated      */
 } pool_slot_status_t;
 
 /* -------------------------------------------------------------------------- */
 /*                             Implementation                                 */
 /* -------------------------------------------------------------------------- */
 
-/**
- * @brief Helper function to validate the pool handle.
- *
- * @param[in] p_pool Pointer to check.
- * @return           true if valid (non-NULL), false otherwise.
- */
 static bool
 pool_validate_handle(const pool_handle_t p_pool)
 {
         return (p_pool != NULL);
 }
 
-/**
- * @brief Helper function to validate the ID pointer.
- *
- * @param[in] p_id Pointer to check.
- * @return         true if valid (non-NULL), false otherwise.
- */
 static bool
-pool_validate_id_ptr(pool_id_t *const p_id)
+pool_validate_id_ptr(const pool_id_t *const p_id)
 {
         return (p_id != NULL);
 }
 
 /**
- * @brief Finds a free slot index based on the configured lookup strategy.
+ * @brief Find a free slot using the configured lookup strategy.
  *
- * @param[in]  p_pool     Pointer to the pool instance.
- * @param[out] p_index    Pointer to store the found free index.
- * @return               POOL_OK if found, POOL_ERR_FULL if none available.
+ * @param[in]  p_pool   Pointer to the pool instance.
+ * @param[out] p_index  Receives the found slot index on success.
+ *
+ * @return  @c POOL_OK if a free slot was found, @c POOL_ERR_FULL otherwise.
  */
 static pool_status_t
 pool_find_free_slot(const struct pool_t *const p_pool, pool_id_t *const p_index)
@@ -65,30 +92,33 @@ pool_find_free_slot(const struct pool_t *const p_pool, pool_id_t *const p_index)
         size_t iterations = 0U;
         const size_t max_slots = (size_t)POOL_MAX_SLOTS;
 
-        /* Determine starting point based on configuration */
-        if (POOL_LOOKUP_STRATEGY == POOL_LOOKUP_HASH) {
-                /*
-                 * Hash/Round-Robin Strategy: Start searching from the saved
-                 * next index. This distributes allocations across the array
-                 * over time, preventing wear concentration in specific memory
-                 * regions (relevant for NVM pools).
-                 */
-                start_index = (size_t)p_pool->next_index;
-                if (start_index >= max_slots) {
-                        start_index = 0U;
-                }
-        } else {
-                /*
-                 * Linear Strategy: Always start from index 0. This is the most
-                 * predictable behavior for verification tools, ensuring
-                 * deterministic scan order.
-                 */
+        /*
+         * MISRA C:2023 Rule 14.3 (advisory): controlling expression
+         * should not be invariant. The lookup strategy is a build-time
+         * constant, so the branch is resolved at preprocessing time
+         * rather than runtime.
+         */
+#if POOL_LOOKUP_STRATEGY == POOL_LOOKUP_HASH
+        /*
+         * Hash / round-robin: resume from the saved next-index cursor
+         * so allocations spread across the array over time (useful for
+         * NVM-backed pools).
+         */
+        start_index = (size_t)p_pool->next_index;
+        if (start_index >= max_slots) {
                 start_index = 0U;
         }
+#else
+        /*
+         * Linear: always start at index 0. Deterministic scan order;
+         * the simplest target for verification tools. next_index is
+         * unused in this mode.
+         */
+        start_index = 0U;
+#endif
 
         current_index = start_index;
 
-        /* Scan loop with bounds check to prevent infinite loops on full pool */
         while (iterations < max_slots) {
                 if (p_pool->slot_status[current_index] == POOL_SLOT_FREE) {
                         *p_index = (pool_id_t)current_index;
@@ -97,7 +127,7 @@ pool_find_free_slot(const struct pool_t *const p_pool, pool_id_t *const p_index)
 
                 current_index++;
                 if (current_index >= max_slots) {
-                        current_index = 0U; /* Wrap around */
+                        current_index = 0U;
                 }
                 iterations++;
         }
@@ -114,23 +144,15 @@ pool_init(pool_handle_t p_pool)
                 return POOL_ERR_NULL_PTR;
         }
 
-        /*
-         * MISRA C:2012 Rule 14.3: Initializers for objects with static storage
-         * duration should be constant expressions where possible. However,
-         * memset is acceptable here as initialization logic. We zero out memory
-         * and status flags explicitly.
-         */
-
-        /* Clear the entire memory block to ensure no garbage data exists */
-        (void)memset(p_pool->storage.bytes, 0x00U,
+        /* Zero the storage block. memset writes pool_byte_t units; on
+         * a 16-bit MAU target each unit covers one addressable word. */
+        (void)memset(p_pool->storage.bytes, 0x00,
                      sizeof(p_pool->storage.bytes));
 
-        /* Explicitly set all slots to FREE state */
         for (i = 0U; i < (size_t)POOL_MAX_SLOTS; i++) {
                 p_pool->slot_status[i] = POOL_SLOT_FREE;
         }
 
-        /* Reset allocation counter */
         p_pool->next_index = 0U;
 
         return POOL_OK;
@@ -150,15 +172,16 @@ pool_acquire(pool_handle_t p_pool, pool_id_t *const p_id)
                 return POOL_ERR_NULL_PTR;
         }
 
-        /* Find a free slot using the configured strategy */
         status = pool_find_free_slot(p_pool, &free_index);
 
         if (status == POOL_OK) {
-                /* This library is not thread-safe; protect with an external
-                 * mutex if used concurrently. */
+                /*
+                 * Single-writer contract: see the threading note in
+                 * pool.h. Two concurrent writers must serialise.
+                 */
                 p_pool->slot_status[free_index] = POOL_SLOT_USED;
 
-                /* Advance the next scan start index for hash strategy. */
+                /* Advance the next-index cursor for the hash strategy. */
                 {
                         pool_id_t next = (pool_id_t)(free_index + 1U);
                         if (next >= (pool_id_t)POOL_MAX_SLOTS) {
@@ -180,48 +203,55 @@ pool_release(pool_handle_t p_pool, const pool_id_t id)
                 return POOL_ERR_NULL_PTR;
         }
 
-        /* Bounds check on ID */
         if (id >= POOL_MAX_SLOTS) {
                 return POOL_ERR_INVALID_ID;
         }
 
         /*
-         * Safety Check: Prevent Double Free and Invalid State Access.
-         * If the slot is not explicitly marked as USED, this is an error
-         * condition. This catches both double-free and uninitialized garbage
-         * states.
+         * Reject anything that is not explicitly USED. This catches
+         * both double-free attempts and uninitialised slot_status
+         * bytes (e.g. a struct memset to 0xFF prior to pool_init()).
          */
         if (p_pool->slot_status[id] != POOL_SLOT_USED) {
                 return POOL_ERR_INVALID_ID;
         }
 
         /*
-         * Optional: Clear memory block content for security/safety to prevent
-         * information leakage if this pool holds sensitive data.
-         * This is a best practice in IEC 61508 safety lifecycle management.
+         * Clear the slot's payload BEFORE flipping the status flag.
+         * If a higher-priority context (e.g. an ISR that obeys the
+         * single-writer contract by virtue of priority) acquires this
+         * slot after the FREE store, it must not see stale bytes.
          *
-         * Note: We clear memory BEFORE marking the slot as free. This ensures
-         * that if a higher-priority context (e.g., ISR) interrupts and acquires
-         * this slot, it won't have its data wiped by the resuming release.
+         * The volatile qualifier here is for dead-store-elimination
+         * prevention (the "secure memset" pattern); it is unrelated to
+         * the POOL_ATOMIC qualifier on slot_status[] above, which is
+         * for cross-context visibility.
          */
         {
                 const size_t block_size = sizeof(p_pool->storage.bytes);
                 const size_t offset = ((size_t)id) * ((size_t)POOL_ITEM_SIZE);
+                size_t k;
 
+                /*
+                 * Defence in depth: the `id >= POOL_MAX_SLOTS` check above
+                 * already proves this branch is unreachable, but we keep it
+                 * to guarantee `offset + POOL_ITEM_SIZE <= block_size` at the
+                 * point of access, in line with IEC 61508 defensive coding.
+                 */
+                /* cppcheck-suppress arrayIndexOutOfBoundsCond */
                 if (offset > (block_size - (size_t)POOL_ITEM_SIZE)) {
                         return POOL_ERR_INVALID_ID;
                 }
-                /* Use volatile to prevent compiler optimization removing the
-                 * clear if memory is critical */
-                volatile uint8_t *const p_mem_ptr =
+
+                volatile pool_byte_t *const p_mem_ptr =
+                    /* cppcheck-suppress arrayIndexOutOfBoundsCond */
                     &p_pool->storage.bytes[offset];
-                for (size_t k = 0U; k < (size_t)POOL_ITEM_SIZE; k++) {
-                        p_mem_ptr[k] = 0x00U;
+
+                for (k = 0U; k < (size_t)POOL_ITEM_SIZE; k++) {
+                        p_mem_ptr[k] = (pool_byte_t)0x00;
                 }
         }
 
-        /* Mark slot as free (Last step for thread/ISR safety window reduction)
-         */
         p_pool->slot_status[id] = POOL_SLOT_FREE;
 
         return POOL_OK;
@@ -234,7 +264,6 @@ pool_get_pointer(pool_handle_t p_pool, const pool_id_t id)
                 return NULL;
         }
 
-        /* Bounds check */
         if (id >= POOL_MAX_SLOTS) {
                 return NULL;
         }
@@ -243,15 +272,20 @@ pool_get_pointer(pool_handle_t p_pool, const pool_id_t id)
                 return NULL;
         }
 
-        /* Calculate address safely using offset arithmetic on uint8_t array */
         const size_t block_size = sizeof(p_pool->storage.bytes);
         const size_t offset = ((size_t)id) * ((size_t)POOL_ITEM_SIZE);
 
+        /*
+         * Defence in depth: the `id >= POOL_MAX_SLOTS` check above already
+         * proves this branch is unreachable, but we keep it for IEC 61508
+         * defensive coding posture.
+         */
+        /* cppcheck-suppress arrayIndexOutOfBoundsCond */
         if (offset > (block_size - (size_t)POOL_ITEM_SIZE)) {
                 return NULL;
         }
 
-        /* Return void pointer to the start of the slot's memory block */
+        /* cppcheck-suppress arrayIndexOutOfBoundsCond */
         return &p_pool->storage.bytes[offset];
 }
 

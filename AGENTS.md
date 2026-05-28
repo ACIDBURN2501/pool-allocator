@@ -5,7 +5,8 @@
 ## 1) Project-specific instructions
 
 **Project:** `pool`
-**Primary goal:** A static object pool allocator in C for safety-critical embedded systems.
+**Primary goal:** A static object pool allocator in C for safety-critical
+embedded systems. Supports hosted targets and the TI C2000 family.
 
 ### 1.1 Essential commands
 
@@ -16,12 +17,74 @@ meson setup build --wipe --buildtype=release -Dbuild_tests=false
 meson compile -C build
 ```
 
-#### Configure, build, and run unit tests
+#### Configure, build, and run unit tests (host, c11 atomicity)
 
 ```sh
 meson setup build --wipe --buildtype=debug -Dbuild_tests=true
 meson compile -C build
 meson test -C build --verbose
+```
+
+#### Volatile-mode host build (covers the TI C2000 atomicity path)
+
+```sh
+meson setup build_volatile --wipe --buildtype=debug -Dbuild_tests=true \
+                            -Datomicity_mode=volatile
+meson compile -C build_volatile
+meson test -C build_volatile --verbose
+```
+
+#### TI C2000 cross build (library only)
+
+```sh
+meson setup build_c2000 --wipe --cross-file=ti-c2000.ini -Dbuild_tests=false
+meson compile -C build_c2000
+```
+
+The cross file (`ti-c2000.ini`) is **user-provided** — it pins the
+local TI codegen tools install. Place it on disk anywhere Meson
+searches for cross files (the current directory, or one of the
+standard user/system locations documented at
+<https://mesonbuild.com/Cross-compilation.html>) or pass an absolute
+path with `--cross-file=`.
+
+The C2000 codegen ships no `<stdatomic.h>`; the `atomicity_mode=auto`
+default selects the `volatile` fallback automatically because
+`CHAR_BIT > 8` on that target.
+
+#### Static analysis (cppcheck) and memory check (Valgrind)
+
+```sh
+# cppcheck (CI gate)
+cppcheck --enable=warning,style,performance,portability --error-exitcode=1 \
+         --inline-suppr --std=c11 \
+         --suppress=missingIncludeSystem --suppress=unusedFunction \
+         -I include src/ include/
+
+# Valgrind memcheck - build WITHOUT sanitizers, then wrap the test run
+meson setup build_mem --wipe --buildtype=debug -Dbuild_tests=true
+meson compile -C build_mem
+meson test -C build_mem --verbose \
+  --wrapper='valgrind --error-exitcode=1 --leak-check=full \
+             --show-leak-kinds=all --track-origins=yes \
+             --errors-for-leak-kinds=all'
+```
+
+#### ThreadSanitizer (concurrency test, c11 mode only)
+
+```sh
+meson setup build_tsan --wipe --buildtype=debug -Dbuild_tests=true \
+                       -Dtsan=true -Datomicity_mode=c11
+meson compile -C build_tsan
+meson test -C build_tsan --verbose
+```
+
+#### 16-bit MAU simulation (host run of the C2000 storage path)
+
+```sh
+meson setup build --wipe --buildtype=debug -Dbuild_tests=true
+meson compile -C build
+meson test -C build test_pool_16bit_sim --verbose
 ```
 
 ---
@@ -46,33 +109,63 @@ meson test -C build --verbose
 
 ### Build & configuration
 
-- Use the Meson build system. Do not introduce CMake, Make, or other systems.
-- Update `src/meson.build` when adding or removing source files.
+- Use the Meson build system. Do not introduce CMake, Make, or other
+  systems.
+- Update `meson.build` / `tests/meson.build` when adding or removing
+  source files.
+- The build pins `c_std=c11`. Do not loosen.
 
 ### Formatting
 
-- `.clang-format` is present and **mandatory**. Run `clang-format -i` on all
-  modified `.c` / `.h` files before committing.
+- `.clang-format` is present and **mandatory**. Run `clang-format -i` on
+  all modified `.c` / `.h` files before committing.
 - Do not reformat unrelated code.
-- Key settings: 8-space indent, `BreakBeforeBraces: Linux`, column limit 80.
+- Key settings: 8-space indent, `BreakBeforeBraces: Linux`, column
+  limit 80.
 
 ### Style & correctness
 
 - Match conventions in the existing files (indentation, braces, naming).
 - Validate pointer arguments at every public API boundary.
 - No heap allocation (`malloc` / `free` / VLAs).
-- Use `uint32_t`, `uint16_t`, `int16_t`, `bool` from `<stdint.h>` /
-  `<stdbool.h>` — never plain `int` for fixed-width fields.
+- Use fixed-width types from `<stdint.h>` / `<stdbool.h>` — never plain
+  `int` for fixed-width fields.
+- For byte-like buffers that touch the pool's storage, use
+  `pool_byte_t` (defined in `pool_platform.h`) so code stays portable
+  across 8-bit and 16-bit MAU targets. The C11 standard requires
+  `uint8_t` to be exactly 8 bits; on the TI C2000 it is not defined.
+- For per-flag fields that need atomicity, use the `POOL_ATOMIC(type)`
+  macro (`_Atomic` on hosted, `volatile` on toolchains without
+  `<stdatomic.h>`).
 
 ### Error handling
 
-- Public functions return `bool` or validate via early `return`.
-- No `errno`; no exceptions.
+- Public functions return `pool_status_t` or `void *`. No `errno`, no
+  exceptions.
 
 ### Testing
 
 - Run `meson test -C build` after every change.
 - Add a test case for each bug fix.
-- Tests live in `tests/test_pool.c`; both strategy executables must pass.
+- Tests live in `tests/test_pool.c`. New code must build and pass in
+  both `c11` and `volatile` atomicity modes, and must not break the
+  TI C2000 cross-build.
 
 ---
+
+## 5) Repository layout
+
+```
+config/pool_version.h.in       Version header template (generated by Meson)
+include/pool.h                 Public API
+include/pool_conf.h            Build-time configurable defaults
+include/pool_platform.h        Platform abstraction (pool_byte_t, POOL_ATOMIC, ...)
+src/pool.c                     Implementation
+tests/test_pool.c              Unit tests (run native 8-bit MAU and 16-bit sim)
+tests/test_pool_concurrency.c  Single-writer/many-readers stress (TSAN-gated)
+tests/meson.build              Test build
+meson.build                    Top-level build
+meson_options.txt              Build options (atomicity_mode, tsan, ...)
+CHANGELOG.md                   Keep a Changelog
+CONTRIBUTING.md                Contributor guide
+```

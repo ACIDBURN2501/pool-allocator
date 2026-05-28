@@ -1,84 +1,73 @@
 /**
  * @file pool.h
- * @brief Static Object Pool Allocator for Safety-Critical Systems
+ * @brief Static object pool allocator for safety-critical systems.
  *
- * This module implements a static memory pool allocator designed to be
- * compliance-ready for MISRA C:2012 and IEC 61508 standards. It prohibits
- * dynamic memory allocation (malloc/free) in favor of pre-allocated static
- * buffers, ensuring deterministic behavior and eliminating fragmentation risks.
+ * @details
+ *    This module implements a fixed-size object pool. It is designed to
+ *    be drop-in safe in deeply embedded and audited firmware: no dynamic
+ *    memory, no VLAs, no recursion, no data-dependent loop bounds.
  *
- * @note This library is not thread-safe. Synchronization (e.g., mutexes or
- *       interrupt disabling) is the responsibility of the caller if the pool
- *       is accessed from multiple execution contexts.
+ *    MISRA C:2023 / IEC 61508 awareness
+ *    ----------------------------------
+ *    The implementation is written with MISRA C:2023 in mind and is
+ *    intended to be used in IEC 61508 environments. The codebase is
+ *    not formally certified. The one intentional, repository-wide
+ *    advisory deviation is Rule 15.5 (single point of exit); guard
+ *    clauses use early @c return at API boundaries.
+ *
+ *    Concurrency model and threading contract
+ *    ----------------------------------------
+ *    The supported contract is single-writer / many-readers per pool
+ *    instance:
+ *
+ *      - SINGLE WRITER: exactly one context (one ISR, one task, or
+ *        one control loop) may call the mutating functions
+ *        (@c pool_init, @c pool_acquire, @c pool_release) on a given
+ *        pool.
+ *      - MANY READERS: any number of other contexts may concurrently
+ *        call @c pool_get_pointer and @c pool_get_pointer_checked.
+ *
+ *    The per-slot status flags are qualified with @c POOL_ATOMIC, which
+ *    expands to @c _Atomic on C11 hosts and @c volatile on toolchains
+ *    that ship no @c <stdatomic.h> (e.g. TI C2000). The qualifier makes
+ *    each individual field access well-defined; it does NOT make
+ *    @c pool_acquire or @c pool_release atomic as a whole. Two writer
+ *    contexts that share a pool MUST be serialised by the caller.
+ *
+ *    Platform support
+ *    ----------------
+ *    Works on any C11 toolchain with an 8-bit or 16-bit minimum
+ *    addressable unit. On the TI C2000 family (@c CHAR_BIT == 16) the
+ *    storage falls back to a @c uint16_t array transparently via
+ *    @c pool_platform.h; the public API is unchanged. Build-time
+ *    configuration lives in @c pool_conf.h.
  *
  * @copyright MIT License
  */
 
-#ifndef POOL_H
-#define POOL_H
+#ifndef POOL_H_
+#define POOL_H_
 
 /* -------------------------------------------------------------------------- */
 /*                                 Includes                                   */
 /* -------------------------------------------------------------------------- */
+
+#include "pool_conf.h"
+#include "pool_platform.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 /* -------------------------------------------------------------------------- */
-/*                               Configuration                                */
-/* -------------------------------------------------------------------------- */
-
-/**
- * @def POOL_ITEM_SIZE
- * @brief The size in bytes of each object managed by the pool.
- *        Must be defined before including this header if not using default.
- */
-#ifndef POOL_ITEM_SIZE
-#define POOL_ITEM_SIZE 64U
-#endif
-
-/**
- * @def POOL_MAX_SLOTS
- * @brief The maximum number of objects the pool can manage simultaneously.
- *        Must be defined before including this header if not using default.
- */
-#ifndef POOL_MAX_SLOTS
-#define POOL_MAX_SLOTS 16U
-#endif
-
-/* -------------------------------------------------------------------------- */
-/*                         Lookup Strategy Constants */
-/* -------------------------------------------------------------------------- */
-
-/**
- * @brief Lookup strategy constants.
- */
-#define POOL_LOOKUP_LINEAR 0U
-#define POOL_LOOKUP_HASH   1U
-
-/**
- * @def POOL_LOOKUP_STRATEGY
- * @brief Defines the algorithm used to find a free slot during acquisition.
- *
- * Options:
- *   - POOL_LOOKUP_LINEAR (0): Scans from index 0 upwards. Deterministic, O(N).
- *   - POOL_LOOKUP_HASH   (1): Starts scan based on allocation history modulo N.
- *                             Distributes wear more evenly across memory array.
- */
-#ifndef POOL_LOOKUP_STRATEGY
-#define POOL_LOOKUP_STRATEGY POOL_LOOKUP_LINEAR
-#endif
-
-/* -------------------------------------------------------------------------- */
-/*                         Compile-Time Configuration */
+/*                         Compile-time configuration                         */
 /* -------------------------------------------------------------------------- */
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 _Static_assert(POOL_ITEM_SIZE > 0U, "POOL_ITEM_SIZE must be > 0");
 _Static_assert(POOL_MAX_SLOTS > 0U, "POOL_MAX_SLOTS must be > 0");
-_Static_assert(((size_t)POOL_ITEM_SIZE % (size_t)_Alignof(max_align_t)) == 0U,
-               "POOL_ITEM_SIZE must be a multiple of max_align_t alignment");
+_Static_assert(((size_t)POOL_ITEM_SIZE % (size_t)_Alignof(pool_align_t)) == 0U,
+               "POOL_ITEM_SIZE must be a multiple of pool_align_t alignment");
 _Static_assert(((size_t)POOL_MAX_SLOTS) <= (SIZE_MAX / (size_t)POOL_ITEM_SIZE),
                "POOL_MAX_SLOTS * POOL_ITEM_SIZE overflows size_t");
 _Static_assert(((size_t)POOL_MAX_SLOTS) <= (size_t)UINT16_MAX,
@@ -89,7 +78,7 @@ _Static_assert((POOL_LOOKUP_STRATEGY == POOL_LOOKUP_LINEAR)
 #endif
 
 /* -------------------------------------------------------------------------- */
-/*                               Type Definitions                             */
+/*                               Type definitions                             */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -98,19 +87,27 @@ _Static_assert((POOL_LOOKUP_STRATEGY == POOL_LOOKUP_LINEAR)
 typedef uint16_t pool_id_t;
 
 /**
- * @brief Pool manager instance.
+ * @brief Raw storage backing a single pool instance.
  *
- * The pool is intended to be allocated by the user (e.g., as a static or stack
- * variable) and initialized with pool_init(). Do not modify members directly.
+ * The union forces the storage block to be aligned at least as
+ * strictly as @c pool_align_t, so every slot can hold any standard
+ * scalar type when @c POOL_ITEM_SIZE is a multiple of that alignment.
  */
 typedef union {
-        max_align_t align;
-        uint8_t bytes[POOL_MAX_SLOTS * POOL_ITEM_SIZE];
+        pool_align_t align;
+        pool_byte_t bytes[POOL_MAX_SLOTS * POOL_ITEM_SIZE];
 } pool_storage_t;
 
+/**
+ * @brief Pool manager instance.
+ *
+ * The pool is allocated by the caller (e.g. as a static or stack
+ * variable) and initialised with @c pool_init. Do not modify members
+ * directly; use the public API.
+ */
 struct pool_t {
         pool_storage_t storage;
-        uint8_t slot_status[POOL_MAX_SLOTS];
+        POOL_ATOMIC(uint_least8_t) slot_status[POOL_MAX_SLOTS];
         pool_id_t next_index;
 };
 
@@ -120,11 +117,11 @@ typedef struct pool_t *pool_handle_t;
  * @brief Return codes for pool operations.
  */
 typedef enum {
-        POOL_OK = 0,            ///< Operation completed successfully
-        POOL_ERR_NULL_PTR = -1, ///< A provided pointer argument was NULL
-        POOL_ERR_FULL = -2,     ///< No free slots available in the pool
-        POOL_ERR_INVALID_ID =
-            -3 ///< Attempted to release an invalid or already freed slot
+        POOL_OK = 0,             /**< Operation completed successfully       */
+        POOL_ERR_NULL_PTR = -1,  /**< A provided pointer argument was NULL   */
+        POOL_ERR_FULL = -2,      /**< No free slots available in the pool    */
+        POOL_ERR_INVALID_ID = -3 /**< ID is out of range or refers to a
+                                    slot that is not currently allocated   */
 } pool_status_t;
 
 /* -------------------------------------------------------------------------- */
@@ -136,74 +133,98 @@ extern "C" {
 #endif
 
 /**
- * @brief Initializes the pool manager instance.
+ * @brief Initialise the pool manager instance.
  *
- * This function must be called before any other operation on the pool handle.
- * It resets internal counters and marks all slots as free.
+ * Must be called once before any other operation on the pool. Resets
+ * the per-slot status flags to FREE, clears the storage block, and
+ * resets the next-index cursor.
  *
- * @param[in]  p_pool     Pointer to the pool structure to initialize. Must not
- * be NULL.
- * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR otherwise.
+ * @param[in] p_pool  Pointer to the pool structure to initialise.
+ *                    Must not be NULL.
+ *
+ * @return  @c POOL_OK on success.
+ * @return  @c POOL_ERR_NULL_PTR if @p p_pool is NULL.
  */
 pool_status_t pool_init(pool_handle_t p_pool);
 
 /**
- * @brief Acquires a free slot from the pool.
+ * @brief Acquire a free slot from the pool.
  *
- * Allocates one chunk of memory (POOL_ITEM_SIZE bytes) and returns its ID.
- * The first slot is aligned to at least alignof(max_align_t). All slots are
- * equally aligned if POOL_ITEM_SIZE is a multiple of alignof(max_align_t).
+ * Finds a free slot using the strategy configured by
+ * @c POOL_LOOKUP_STRATEGY, marks it allocated, and writes its ID to
+ * @p p_id. Every slot is aligned to at least @c _Alignof(pool_align_t)
+ * when @c POOL_ITEM_SIZE is a multiple of that alignment (enforced by
+ * a @c _Static_assert in this header).
  *
- * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
- * NULL.
- * @param[out] p_id       Pointer to store the ID of the acquired slot. Must not
- * be NULL.
- * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR or
- * POOL_ERR_FULL otherwise.
+ * @note  The find-then-claim sequence is not a single atomic operation.
+ *        Two concurrent acquire calls could observe the same slot as
+ *        free and both claim it. This is why the threading contract
+ *        (see the file header) requires callers to serialise mutators.
+ *
+ * @param[in]  p_pool  Pointer to the initialised pool. Must not be NULL.
+ * @param[out] p_id    Pointer that receives the allocated slot ID.
+ *                     Must not be NULL.
+ *
+ * @return  @c POOL_OK on success.
+ * @return  @c POOL_ERR_NULL_PTR if either pointer is NULL.
+ * @return  @c POOL_ERR_FULL if no slot is currently free.
  */
 pool_status_t pool_acquire(pool_handle_t p_pool, pool_id_t *const p_id);
 
 /**
- * @brief Releases a previously acquired slot back to the pool.
+ * @brief Release a previously acquired slot back to the pool.
  *
- * Marks the specified slot as free for future allocation. This function
- * includes checks to prevent double-free errors by verifying the current status
- * of the slot.
+ * Verifies that the slot is currently marked USED before clearing it
+ * (so double-free attempts are rejected with @c POOL_ERR_INVALID_ID).
  *
- * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
- * NULL.
- * @param[in]  id         The ID of the slot to release.
- * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR or
- * POOL_ERR_INVALID_ID otherwise.
+ * The slot's memory is cleared to zero before the status flag is
+ * flipped back to FREE. The serialised-writer contract above already
+ * prevents a concurrent acquire from racing the release; this ordering
+ * is defensive and enforces the post-condition that any later acquire
+ * of the same slot starts with zeroed memory.
+ *
+ * @param[in] p_pool  Pointer to the initialised pool. Must not be NULL.
+ * @param[in] id      The ID of the slot to release.
+ *
+ * @return  @c POOL_OK on success.
+ * @return  @c POOL_ERR_NULL_PTR if @p p_pool is NULL.
+ * @return  @c POOL_ERR_INVALID_ID if @p id is out of range or the slot
+ *          is not currently allocated.
  */
 pool_status_t pool_release(pool_handle_t p_pool, const pool_id_t id);
 
 /**
- * @brief Retrieves a pointer to the memory block for a specific ID.
+ * @brief Retrieve a pointer to the memory block for a specific ID.
  *
- * This function does not change state; it calculates the address based on the
- * provided ID and returns NULL if the slot is out of range or currently free.
+ * Does not mutate pool state. Returns @c NULL when @p id is out of
+ * range, when the slot is not currently allocated, or when @p p_pool
+ * is NULL.
  *
- * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
- * NULL.
- * @param[in]  id         The ID of the slot to access.
- * @return                 Pointer to the start of the memory block, or NULL if
- * ID is out of bounds or the slot is free.
+ * @param[in] p_pool  Pointer to the initialised pool. Must not be NULL
+ *                    to receive a non-NULL result.
+ * @param[in] id      The ID of the slot to access.
+ *
+ * @return  Pointer to the start of the slot's memory block, or @c NULL
+ *          on any of the rejection conditions above.
  */
 void *pool_get_pointer(pool_handle_t p_pool, const pool_id_t id);
 
 /**
- * @brief Retrieves a pointer to the memory block for a specific ID (checked).
+ * @brief Retrieve a pointer to the memory block for a specific ID
+ *        (checked variant).
  *
- * Validates that the ID is in range and currently allocated.
+ * Same checks as @c pool_get_pointer, but returns a status code and
+ * always writes a defined value to @p p_ptr (@c NULL on failure).
  *
- * @param[in]  p_pool     Pointer to the initialized pool handle. Must not be
- * NULL.
- * @param[in]  id         The ID of the slot to access.
- * @param[out] p_ptr      Receives pointer to the start of the memory block.
- * Must not be NULL.
- * @return                 POOL_OK if successful, POOL_ERR_NULL_PTR or
- * POOL_ERR_INVALID_ID otherwise.
+ * @param[in]  p_pool  Pointer to the initialised pool. Must not be NULL.
+ * @param[in]  id      The ID of the slot to access.
+ * @param[out] p_ptr   Receives the slot pointer on success, @c NULL on
+ *                     failure. Must not be NULL.
+ *
+ * @return  @c POOL_OK on success.
+ * @return  @c POOL_ERR_NULL_PTR if @p p_pool or @p p_ptr is NULL.
+ * @return  @c POOL_ERR_INVALID_ID if @p id is out of range or the slot
+ *          is not currently allocated.
  */
 pool_status_t pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
                                        void **const p_ptr);
@@ -212,4 +233,4 @@ pool_status_t pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
 }
 #endif
 
-#endif /* POOL_H */
+#endif /* POOL_H_ */

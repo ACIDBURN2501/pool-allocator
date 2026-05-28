@@ -7,8 +7,12 @@ on:
     branches: ["master"]
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Build the library and run the full test suite under ASan + UBSan across
+  # the full configuration matrix: OS × lookup strategy × atomicity mode.
+  # ---------------------------------------------------------------------------
   test:
-    name: "Test (${{ matrix.os }}, ${{ matrix.lookup_strategy }})"
+    name: "Test (${{ matrix.os }}, ${{ matrix.lookup_strategy }}, ${{ matrix.atomicity_mode }})"
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -16,6 +20,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         lookup_strategy: [linear, hash]
+        atomicity_mode: [c11, volatile]
 
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +45,9 @@ jobs:
           meson setup build
           --buildtype=debug
           -Dbuild_tests=true
+          -Db_sanitize=address,undefined
           -Dlookup_strategy=${{ matrix.lookup_strategy }}
+          -Datomicity_mode=${{ matrix.atomicity_mode }}
 
       - name: Build
         run: meson compile -C build
@@ -52,11 +59,16 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: testlog-${{ matrix.os }}
+          name: testlog-${{ matrix.os }}-${{ matrix.lookup_strategy }}-${{ matrix.atomicity_mode }}
           path: build/meson-logs/testlog.txt
 
+  # ---------------------------------------------------------------------------
+  # Release build matrix - the configuration a downstream project would use.
+  # No sanitizers, no tests; just verify the library compiles cleanly across
+  # the same configuration axes.
+  # ---------------------------------------------------------------------------
   release-build:
-    name: "Release (${{ matrix.os }}, ${{ matrix.lookup_strategy }})"
+    name: "Release (${{ matrix.os }}, ${{ matrix.lookup_strategy }}, ${{ matrix.atomicity_mode }})"
     runs-on: ${{ matrix.os }}
     needs: test
 
@@ -64,7 +76,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        lookup_strategy: [hash, linear]
+        lookup_strategy: [linear, hash]
+        atomicity_mode: [c11, volatile]
 
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +103,174 @@ jobs:
           --buildtype=release
           -Dbuild_tests=false
           -Dlookup_strategy=${{ matrix.lookup_strategy }}
+          -Datomicity_mode=${{ matrix.atomicity_mode }}
 
       - name: Build
         run: meson compile -C build
+
+  # ---------------------------------------------------------------------------
+  # Static analysis with cppcheck. Runs against the source and the public
+  # headers; fails on any warning/style/performance/portability finding
+  # that is not silenced by an inline `cppcheck-suppress` comment.
+  # ---------------------------------------------------------------------------
+  cppcheck:
+    name: "Static analysis (cppcheck)"
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update -q && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: >
+          cppcheck
+          --enable=warning,style,performance,portability
+          --error-exitcode=1
+          --inline-suppr
+          --std=c11
+          --suppress=missingIncludeSystem
+          --suppress=unusedFunction
+          -I include
+          src/ include/
+
+  # ---------------------------------------------------------------------------
+  # ThreadSanitizer gate. Exercises the documented single-writer /
+  # many-readers concurrency contract from tests/test_pool_concurrency.c
+  # under TSAN. The c11 atomicity mode (default) must remain race-free;
+  # TSAN runs only in c11 mode because the volatile path is expected
+  # (and documented) to report races on a multi-core host.
+  #
+  # TSAN is incompatible with ASan, so it lives in its own job.
+  # ---------------------------------------------------------------------------
+  tsan:
+    name: "ThreadSanitizer (c11 concurrency)"
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install ninja
+        run: sudo apt-get update -q && sudo apt-get install -y ninja-build
+
+      - name: Install meson
+        run: pip install meson
+
+      - name: Configure (debug + tests + tsan, c11 atomicity)
+        run: >
+          meson setup build_tsan
+          --buildtype=debug
+          -Dbuild_tests=true
+          -Dtsan=true
+          -Datomicity_mode=c11
+
+      - name: Build
+        run: meson compile -C build_tsan
+
+      - name: Test under ThreadSanitizer
+        run: meson test -C build_tsan --verbose --print-errorlogs
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-log
+          path: build_tsan/meson-logs/testlog.txt
+
+  # ---------------------------------------------------------------------------
+  # 16-bit MAU simulation gate. Builds a second copy of the library with
+  # -DPOOL_SIMULATE_16BIT_MAU on a byte-addressable host, then runs the
+  # same test sources against it. This exercises the pool_byte_t ==
+  # uint16_t code path that the TI C2000 cross-build would compile but
+  # cannot execute in CI (the TI toolchain is not available on GitHub
+  # runners).
+  # ---------------------------------------------------------------------------
+  sim-16bit:
+    name: "16-bit MAU simulation (host)"
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install ninja
+        run: sudo apt-get update -q && sudo apt-get install -y ninja-build
+
+      - name: Install meson
+        run: pip install meson
+
+      - name: Configure (debug + tests + sanitizers)
+        run: >
+          meson setup build_sim
+          --buildtype=debug
+          -Dbuild_tests=true
+          -Db_sanitize=address,undefined
+
+      - name: Build
+        run: meson compile -C build_sim
+
+      - name: Run the 16-bit sim test variant
+        run: meson test -C build_sim --verbose test_pool_16bit_sim
+
+  # ---------------------------------------------------------------------------
+  # Memory-error gate with Valgrind. Runs the test suite under
+  # `memcheck` without compiler sanitizers (ASan and Valgrind are
+  # incompatible). Any leak, invalid read/write, or uninitialised use
+  # fails the job.
+  # ---------------------------------------------------------------------------
+  valgrind:
+    name: "Memory check (Valgrind)"
+    runs-on: ubuntu-latest
+    needs: test
+
+    strategy:
+      fail-fast: false
+      matrix:
+        atomicity_mode: [c11, volatile]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install ninja and valgrind
+        run: sudo apt-get update -q && sudo apt-get install -y ninja-build valgrind
+
+      - name: Install meson
+        run: pip install meson
+
+      - name: Configure (debug, no sanitizers)
+        run: >
+          meson setup build
+          --buildtype=debug
+          -Dbuild_tests=true
+          -Datomicity_mode=${{ matrix.atomicity_mode }}
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test under Valgrind
+        run: >
+          meson test -C build --verbose
+          --wrapper='valgrind --error-exitcode=1 --leak-check=full
+          --show-leak-kinds=all --track-origins=yes --errors-for-leak-kinds=all'
+
+      - name: Upload Valgrind log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-${{ matrix.atomicity_mode }}
+          path: build/meson-logs/testlog.txt
