@@ -1,8 +1,11 @@
 /**
- * @file pool_platform.h
- * @brief Platform abstraction for the pool allocator library.
+ * @copyright MIT Licence
  *
- * @details
+ * @file: pool_platform.h
+ *
+ * @brief
+ *    Platform abstraction for the pool allocator library.
+ *
  *    The pool's storage block is addressed in fixed-size byte units.
  *    This header picks the right storage unit and alignment helper for
  *    the target:
@@ -44,9 +47,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* -------------------------------------------------------------------------- */
-/*                       Byte storage unit selection                          */
-/* -------------------------------------------------------------------------- */
+/* Byte storage unit selection. */
 
 /*
  * Auto-detect a 16-bit MAU target. C11 requires uint8_t to be exactly
@@ -76,9 +77,7 @@ typedef uint8_t pool_byte_t;
 #define POOL_UNITS_TO_OCTETS(units)                                            \
         ((size_t)(units) * ((size_t)POOL_ADDR_UNIT_BITS / 8U))
 
-/* -------------------------------------------------------------------------- */
-/*                       Alignment-helper selection                           */
-/* -------------------------------------------------------------------------- */
+/* Alignment-helper selection. */
 
 /*
  * pool_align_t is the strictest scalar alignment the pool needs to
@@ -99,9 +98,7 @@ typedef max_align_t pool_align_t;
 typedef uint64_t pool_align_t;
 #endif
 
-/* -------------------------------------------------------------------------- */
-/*                       Concurrency qualifier macro                          */
-/* -------------------------------------------------------------------------- */
+/* Concurrency qualifier macro. */
 
 #if POOL_ATOMIC_MODE == POOL_ATOMIC_MODE_C11
 #include <stdatomic.h>
@@ -112,9 +109,7 @@ typedef uint64_t pool_align_t;
 #error "Unsupported POOL_ATOMIC_MODE; select C11 or VOLATILE in pool_conf.h"
 #endif
 
-/* -------------------------------------------------------------------------- */
-/*                       Compile-time platform invariants                     */
-/* -------------------------------------------------------------------------- */
+/* Compile-time platform invariants. */
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 _Static_assert(POOL_ADDR_UNIT_BITS == 8U || POOL_ADDR_UNIT_BITS == 16U,

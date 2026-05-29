@@ -1,22 +1,48 @@
 /**
- * @file pool.h
- * @brief Static object pool allocator for safety-critical systems.
+ * @copyright MIT Licence
+ *
+ * @file: pool.h
+ *
+ * @brief
+ *    Static object pool allocator for safety-critical systems.
+ */
+
+#ifndef POOL_H_
+#define POOL_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ================ INCLUDES ================================================ */
+
+#include "pool_conf.h"
+#include "pool_platform.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/**
+ * @defgroup pool_api Pool Allocator Library
+ *
+ * @brief Fixed-size static object pool for deeply embedded firmware.
  *
  * @details
  *    This module implements a fixed-size object pool. It is designed to
  *    be drop-in safe in deeply embedded and audited firmware: no dynamic
  *    memory, no VLAs, no recursion, no data-dependent loop bounds.
  *
- *    MISRA C:2023 / IEC 61508 awareness
- *    ----------------------------------
+ *    ## MISRA C:2023 / IEC 61508 awareness
+ *
  *    The implementation is written with MISRA C:2023 in mind and is
  *    intended to be used in IEC 61508 environments. The codebase is
  *    not formally certified. The one intentional, repository-wide
  *    advisory deviation is Rule 15.5 (single point of exit); guard
  *    clauses use early @c return at API boundaries.
  *
- *    Concurrency model and threading contract
- *    ----------------------------------------
+ *    ## Concurrency model and threading contract
+ *
  *    The supported contract is single-writer / many-readers per pool
  *    instance:
  *
@@ -34,34 +60,33 @@
  *    @c pool_acquire or @c pool_release atomic as a whole. Two writer
  *    contexts that share a pool MUST be serialised by the caller.
  *
- *    Platform support
- *    ----------------
+ *    ## Platform support
+ *
  *    Works on any C11 toolchain with an 8-bit or 16-bit minimum
  *    addressable unit. On the TI C2000 family (@c CHAR_BIT == 16) the
  *    storage falls back to a @c uint16_t array transparently via
  *    @c pool_platform.h; the public API is unchanged. Build-time
  *    configuration lives in @c pool_conf.h.
  *
- * @copyright MIT License
+ * @{
  */
 
-#ifndef POOL_H_
-#define POOL_H_
+/* ================ DEFINES ================================================= */
 
-/* -------------------------------------------------------------------------- */
-/*                                 Includes                                   */
-/* -------------------------------------------------------------------------- */
+/* ---------------- Derived size constants ---------------------------------- */
 
-#include "pool_conf.h"
-#include "pool_platform.h"
+/**
+ * @brief Total usable payload of one pool, in native storage units.
+ *
+ * Exact and padding-free: @c POOL_MAX_SLOTS contiguous slots of
+ * @c POOL_ITEM_SIZE each. The instance's *total* size (payload + status
+ * array + cursor + alignment padding) is given by
+ * @c sizeof(struct pool_t); always prefer that for RAM budgeting,
+ * because a hand-rolled total would miss implementation-defined padding.
+ */
+#define POOL_PAYLOAD_UNITS ((size_t)POOL_MAX_SLOTS * (size_t)POOL_ITEM_SIZE)
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-
-/* -------------------------------------------------------------------------- */
-/*                         Compile-time configuration                         */
-/* -------------------------------------------------------------------------- */
+/* ---------------- Compile-time configuration checks ----------------------- */
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 _Static_assert(POOL_ITEM_SIZE > 0U, "POOL_ITEM_SIZE must be > 0");
@@ -77,29 +102,19 @@ _Static_assert((POOL_LOOKUP_STRATEGY == POOL_LOOKUP_LINEAR)
                "POOL_LOOKUP_STRATEGY must be either LINEAR or HASH");
 #endif
 
-/* -------------------------------------------------------------------------- */
-/*                           Derived size constants                           */
-/* -------------------------------------------------------------------------- */
-
-/**
- * @brief Total usable payload of one pool, in native storage units.
- *
- * Exact and padding-free: @c POOL_MAX_SLOTS contiguous slots of
- * @c POOL_ITEM_SIZE each. The instance's *total* size (payload + status
- * array + cursor + alignment padding) is given by
- * @c sizeof(struct pool_t); always prefer that for RAM budgeting,
- * because a hand-rolled total would miss implementation-defined padding.
- */
-#define POOL_PAYLOAD_UNITS ((size_t)POOL_MAX_SLOTS * (size_t)POOL_ITEM_SIZE)
-
-/* -------------------------------------------------------------------------- */
-/*                               Type definitions                             */
-/* -------------------------------------------------------------------------- */
+/* ================ TYPEDEFS ================================================ */
 
 /**
  * @brief Unique identifier for a slot within the pool.
  */
 typedef uint16_t pool_id_t;
+
+/**
+ * @brief Opaque handle passed at every public-API boundary.
+ */
+typedef struct pool_t *pool_handle_t;
+
+/* ================ STRUCTURES ============================================== */
 
 /**
  * @brief Raw storage backing a single pool instance.
@@ -125,8 +140,6 @@ struct pool_t {
         POOL_ATOMIC(uint_least8_t) slot_status[POOL_MAX_SLOTS];
         pool_id_t next_index;
 };
-
-typedef struct pool_t *pool_handle_t;
 
 /*
  * Optional RAM-budget guard. Define POOL_RAM_BUDGET_OCTETS (via a
@@ -178,13 +191,11 @@ typedef enum {
                                     slot that is not currently allocated   */
 } pool_status_t;
 
-/* -------------------------------------------------------------------------- */
-/*                                API Functions                               */
-/* -------------------------------------------------------------------------- */
+/* ================ MACROS ================================================== */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* ================ GLOBAL VARIABLES ======================================== */
+
+/* ================ GLOBAL PROTOTYPES ======================================= */
 
 /**
  * @brief Initialise the pool manager instance.
@@ -298,6 +309,8 @@ pool_status_t pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
  * @return  A fully-populated @c pool_footprint_t by value.
  */
 pool_footprint_t pool_footprint(void);
+
+/** @} */
 
 #ifdef __cplusplus
 }

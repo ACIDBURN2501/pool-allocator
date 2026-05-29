@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional `POOL_RAM_BUDGET_OCTETS` compile-time guard: when defined, the header `_Static_assert`s that one pool instance fits the given octet budget. `sizeof` is a constant expression, so the check costs no code or data.
 - `tests/test_pool.c`: footprint self-consistency test (matches `sizeof`, the payload macro, the octet conversion, and the overhead arithmetic). Runs under both the 8-bit and 16-bit-MAU-sim builds.
 
+### Changed
+
+- Adopted the shared primitive-family source style across the library files (`pool.h`, `pool.c`, `pool_platform.h`, `pool_conf.h`): the `/* ====== SECTION ====== */` banner skeleton in the public header and implementation, family file-header blocks (`@copyright` / `@file:` / `@brief`), and a `@defgroup pool_api` grouping. Comment/layout only.
+
 ## [2.0.0] - 2026-05-28
 
 ### Added

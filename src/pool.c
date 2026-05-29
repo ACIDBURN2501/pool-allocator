@@ -1,8 +1,11 @@
 /**
- * @file pool.c
- * @brief Implementation of the static object pool allocator.
+ * @copyright MIT Licence
  *
- * @details
+ * @file: pool.c
+ *
+ * @brief
+ *    Implementation of the static object pool allocator.
+ *
  *    See @c pool.h for the public contract, the threading model, and
  *    the MISRA C:2023 / IEC 61508 awareness notes. This translation
  *    unit holds only the internal slot bookkeeping and the find /
@@ -44,13 +47,15 @@
  *      @c cppcheck-suppress at the site.
  */
 
+/* ================ INCLUDES ================================================ */
+
 #include "pool.h"
 
 #include <string.h> /* memset */
 
-/* -------------------------------------------------------------------------- */
-/*                             Internal definitions                           */
-/* -------------------------------------------------------------------------- */
+/* ================ DEFINES ================================================= */
+
+/* ================ STRUCTURES ============================================== */
 
 /**
  * @brief Status flags for individual slots within the pool.
@@ -60,9 +65,20 @@ typedef enum {
         POOL_SLOT_USED = 1U  /**< Slot is currently allocated      */
 } pool_slot_status_t;
 
-/* -------------------------------------------------------------------------- */
-/*                             Implementation                                 */
-/* -------------------------------------------------------------------------- */
+/* ================ TYPEDEFS ================================================ */
+
+/* ================ STATIC PROTOTYPES ======================================= */
+
+static bool pool_validate_handle(const pool_handle_t p_pool);
+static bool pool_validate_id_ptr(const pool_id_t *const p_id);
+static pool_status_t pool_find_free_slot(const struct pool_t *const p_pool,
+                                         pool_id_t *const p_index);
+
+/* ================ STATIC VARIABLES ======================================== */
+
+/* ================ MACROS ================================================== */
+
+/* ================ STATIC FUNCTIONS ======================================== */
 
 static bool
 pool_validate_handle(const pool_handle_t p_pool)
@@ -134,6 +150,8 @@ pool_find_free_slot(const struct pool_t *const p_pool, pool_id_t *const p_index)
 
         return POOL_ERR_FULL;
 }
+
+/* ================ GLOBAL PROTOTYPES ======================================= */
 
 pool_status_t
 pool_init(pool_handle_t p_pool)

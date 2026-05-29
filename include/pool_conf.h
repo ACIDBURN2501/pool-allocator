@@ -1,8 +1,11 @@
 /**
- * @file pool_conf.h
- * @brief Compile-time configuration for the pool allocator library.
+ * @copyright MIT Licence
  *
- * @details
+ * @file: pool_conf.h
+ *
+ * @brief
+ *    Compile-time configuration for the pool allocator library.
+ *
  *    Users may override any option below by defining the macro before
  *    including this header, or via a compiler flag (e.g.
  *    -DPOOL_MAX_SLOTS=64). The #ifndef guards ensure that user-supplied
