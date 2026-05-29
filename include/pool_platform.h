@@ -65,6 +65,17 @@ typedef uint8_t pool_byte_t;
 #define POOL_ADDR_UNIT_BITS 8U
 #endif
 
+/*
+ * Convert a count of native storage units (the unit sizeof yields on
+ * this target) into 8-bit octets. On byte-addressable targets this is
+ * the identity; on a 16-bit MAU target each storage unit spans two
+ * octets, so footprints reported in octets are directly comparable
+ * across platforms. POOL_ADDR_UNIT_BITS is 8 or 16, so the divisor is
+ * exact.
+ */
+#define POOL_UNITS_TO_OCTETS(units)                                            \
+        ((size_t)(units) * ((size_t)POOL_ADDR_UNIT_BITS / 8U))
+
 /* -------------------------------------------------------------------------- */
 /*                       Alignment-helper selection                           */
 /* -------------------------------------------------------------------------- */

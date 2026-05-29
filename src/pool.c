@@ -313,3 +313,26 @@ pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
 
         return POOL_OK;
 }
+
+pool_footprint_t
+pool_footprint(void)
+{
+        pool_footprint_t footprint;
+        const size_t instance_units = sizeof(struct pool_t);
+
+        /*
+         * sizeof(struct pool_t) is authoritative: it captures the
+         * alignment padding a hand-rolled total would miss. The payload
+         * is always <= the instance size, so the overhead subtraction
+         * cannot underflow.
+         */
+        footprint.instance_size_units = instance_units;
+        footprint.instance_size_octets = POOL_UNITS_TO_OCTETS(instance_units);
+        footprint.payload_units = POOL_PAYLOAD_UNITS;
+        footprint.overhead_units = instance_units - POOL_PAYLOAD_UNITS;
+        footprint.capacity = (pool_id_t)POOL_MAX_SLOTS;
+        footprint.item_size = (uint16_t)POOL_ITEM_SIZE;
+        footprint.addr_unit_bits = (uint8_t)POOL_ADDR_UNIT_BITS;
+
+        return footprint;
+}

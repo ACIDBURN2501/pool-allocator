@@ -78,6 +78,21 @@ _Static_assert((POOL_LOOKUP_STRATEGY == POOL_LOOKUP_LINEAR)
 #endif
 
 /* -------------------------------------------------------------------------- */
+/*                           Derived size constants                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * @brief Total usable payload of one pool, in native storage units.
+ *
+ * Exact and padding-free: @c POOL_MAX_SLOTS contiguous slots of
+ * @c POOL_ITEM_SIZE each. The instance's *total* size (payload + status
+ * array + cursor + alignment padding) is given by
+ * @c sizeof(struct pool_t); always prefer that for RAM budgeting,
+ * because a hand-rolled total would miss implementation-defined padding.
+ */
+#define POOL_PAYLOAD_UNITS ((size_t)POOL_MAX_SLOTS * (size_t)POOL_ITEM_SIZE)
+
+/* -------------------------------------------------------------------------- */
 /*                               Type definitions                             */
 /* -------------------------------------------------------------------------- */
 
@@ -112,6 +127,45 @@ struct pool_t {
 };
 
 typedef struct pool_t *pool_handle_t;
+
+/*
+ * Optional RAM-budget guard. Define POOL_RAM_BUDGET_OCTETS (via a
+ * compiler flag or before including this header) to fail the build when
+ * a single pool instance would exceed the budget. The comparison is in
+ * octets, so the same number is meaningful on 8-bit and 16-bit MAU
+ * targets. sizeof is a constant expression, so this is a pure
+ * compile-time check with no code or data cost.
+ */
+#if defined(POOL_RAM_BUDGET_OCTETS) && defined(__STDC_VERSION__)               \
+    && (__STDC_VERSION__ >= 201112L)
+_Static_assert(POOL_UNITS_TO_OCTETS(sizeof(struct pool_t))
+                   <= (size_t)(POOL_RAM_BUDGET_OCTETS),
+               "pool instance exceeds POOL_RAM_BUDGET_OCTETS");
+#endif
+
+/**
+ * @brief Static memory-footprint descriptor for a pool instance.
+ *
+ * Every field is a compile-time property of the configured pool type;
+ * @c pool_footprint() needs no instance to populate it. Sizes are
+ * reported in two units:
+ *
+ *   - @c *_units    native storage units, i.e. what @c sizeof yields on
+ *                   this target (8-bit bytes on byte-addressable cores,
+ *                   16-bit words on a 16-bit MAU target such as the TI
+ *                   C2000 family).
+ *   - @c *_octets   the same quantity normalised to 8-bit octets, so a
+ *                   footprint is directly comparable across platforms.
+ */
+typedef struct {
+        size_t instance_size_units;  /**< @c sizeof(struct pool_t)          */
+        size_t instance_size_octets; /**< instance size, normalised         */
+        size_t payload_units;        /**< usable payload (POOL_PAYLOAD_UNITS) */
+        size_t overhead_units;       /**< status array + cursor + padding   */
+        pool_id_t capacity;          /**< POOL_MAX_SLOTS                     */
+        uint16_t item_size;          /**< POOL_ITEM_SIZE                     */
+        uint8_t addr_unit_bits;      /**< POOL_ADDR_UNIT_BITS (8 or 16)      */
+} pool_footprint_t;
 
 /**
  * @brief Return codes for pool operations.
@@ -228,6 +282,22 @@ void *pool_get_pointer(pool_handle_t p_pool, const pool_id_t id);
  */
 pool_status_t pool_get_pointer_checked(pool_handle_t p_pool, const pool_id_t id,
                                        void **const p_ptr);
+
+/**
+ * @brief Report the static memory footprint of a pool instance.
+ *
+ * Pure and instance-free: every field is a compile-time property of the
+ * configured pool type (@c POOL_MAX_SLOTS, @c POOL_ITEM_SIZE, the
+ * target's addressable-unit width, and the layout chosen by the
+ * compiler). Does not allocate, does not read or write any pool, and is
+ * safe to call from any context.
+ *
+ * Typical uses are a one-line boot/telemetry log of RAM consumption, or
+ * a runtime cross-check against a budget computed elsewhere.
+ *
+ * @return  A fully-populated @c pool_footprint_t by value.
+ */
+pool_footprint_t pool_footprint(void);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0] - 2026-05-29
+
+### Added
+
+- `pool_footprint()` and the `pool_footprint_t` descriptor: report the static memory footprint of a pool instance (instance size, usable payload, overhead, capacity, item size, addressable-unit width). Pure and instance-free — allocates nothing, touches no pool, safe from any context. Sizes are given both in native storage units (what `sizeof` yields) and normalised to 8-bit octets, so footprints are comparable across the 8-bit and 16-bit-MAU targets.
+- `POOL_PAYLOAD_UNITS` macro: the exact, padding-free payload size (`POOL_MAX_SLOTS * POOL_ITEM_SIZE`) in native storage units.
+- `POOL_UNITS_TO_OCTETS()` macro in `pool_platform.h`: normalises a native-storage-unit count to 8-bit octets using `POOL_ADDR_UNIT_BITS` (identity on byte-addressable targets, ×2 on a 16-bit MAU).
+- Optional `POOL_RAM_BUDGET_OCTETS` compile-time guard: when defined, the header `_Static_assert`s that one pool instance fits the given octet budget. `sizeof` is a constant expression, so the check costs no code or data.
+- `tests/test_pool.c`: footprint self-consistency test (matches `sizeof`, the payload macro, the octet conversion, and the overhead arithmetic). Runs under both the 8-bit and 16-bit-MAU-sim builds.
+
 ## [2.0.0] - 2026-05-28
 
 ### Added

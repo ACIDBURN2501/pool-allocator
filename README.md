@@ -134,24 +134,25 @@ All macros may be overridden via compiler flags (`-D...`) or by defining
 them before including `pool.h`. The Meson build front-end exposes the
 same options.
 
-| Macro | Description | Default |
-|---|---|---|
-| `POOL_ITEM_SIZE` | Size in bytes of each pool slot. Must be a multiple of `_Alignof(pool_align_t)`; enforced by `_Static_assert`. | `64U` |
-| `POOL_MAX_SLOTS` | Maximum number of slots in the pool. Must fit in `uint16_t`. | `16U` |
-| `POOL_LOOKUP_STRATEGY` | `POOL_LOOKUP_LINEAR` or `POOL_LOOKUP_HASH`. | `POOL_LOOKUP_LINEAR` |
-| `POOL_ATOMIC_MODE` | `POOL_ATOMIC_MODE_C11` or `POOL_ATOMIC_MODE_VOLATILE`. Auto-selected; can be pinned with `-DPOOL_USE_C11_ATOMIC` or `-DPOOL_USE_VOLATILE_ATOMIC`. | auto |
-| `POOL_NO_MAX_ALIGN_T` | Define to force `pool_align_t` to the `uint64_t` fallback even on a C11-hosted target. Use when `<stddef.h>` on your toolchain provides a `max_align_t` you do not want to depend on. | undefined |
-| `POOL_SIMULATE_16BIT_MAU` | Define on a byte-addressable host to force the 16-bit MAU storage path. For exercising the C2000 layout under host tests. | undefined |
+| Macro                     | Description                                                                                                                                                                           | Default              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `POOL_ITEM_SIZE`          | Size in bytes of each pool slot. Must be a multiple of `_Alignof(pool_align_t)`; enforced by `_Static_assert`.                                                                        | `64U`                |
+| `POOL_MAX_SLOTS`          | Maximum number of slots in the pool. Must fit in `uint16_t`.                                                                                                                          | `16U`                |
+| `POOL_LOOKUP_STRATEGY`    | `POOL_LOOKUP_LINEAR` or `POOL_LOOKUP_HASH`.                                                                                                                                           | `POOL_LOOKUP_LINEAR` |
+| `POOL_ATOMIC_MODE`        | `POOL_ATOMIC_MODE_C11` or `POOL_ATOMIC_MODE_VOLATILE`. Auto-selected; can be pinned with `-DPOOL_USE_C11_ATOMIC` or `-DPOOL_USE_VOLATILE_ATOMIC`.                                     | auto                 |
+| `POOL_NO_MAX_ALIGN_T`     | Define to force `pool_align_t` to the `uint64_t` fallback even on a C11-hosted target. Use when `<stddef.h>` on your toolchain provides a `max_align_t` you do not want to depend on. | undefined            |
+| `POOL_SIMULATE_16BIT_MAU` | Define on a byte-addressable host to force the 16-bit MAU storage path. For exercising the C2000 layout under host tests.                                                             | undefined            |
+| `POOL_RAM_BUDGET_OCTETS`  | Optional. If defined, the header `_Static_assert`s that one pool instance fits the given budget (in octets). Pure compile-time check, no code or data cost.                           | undefined            |
 
 ### Meson options
 
-| Option | Type | Default | Effect |
-|---|---|---|---|
-| `build_tests` | boolean | `false` | Build and run the unit tests |
-| `lookup_strategy` | combo | `linear` | Sets `POOL_LOOKUP_STRATEGY` |
-| `pool_max_slots` | integer | `16` | Sets `POOL_MAX_SLOTS` |
-| `pool_item_size` | integer | `64` | Sets `POOL_ITEM_SIZE` |
-| `atomicity_mode` | combo | `auto` | `auto` / `c11` / `volatile`; pins the per-slot status qualifier |
+| Option            | Type    | Default  | Effect                                                          |
+| ----------------- | ------- | -------- | --------------------------------------------------------------- |
+| `build_tests`     | boolean | `false`  | Build and run the unit tests                                    |
+| `lookup_strategy` | combo   | `linear` | Sets `POOL_LOOKUP_STRATEGY`                                     |
+| `pool_max_slots`  | integer | `16`     | Sets `POOL_MAX_SLOTS`                                           |
+| `pool_item_size`  | integer | `64`     | Sets `POOL_ITEM_SIZE`                                           |
+| `atomicity_mode`  | combo   | `auto`   | `auto` / `c11` / `volatile`; pins the per-slot status qualifier |
 
 ### Choosing a lookup strategy
 
@@ -195,25 +196,55 @@ or a NULL pool. `pool_get_pointer_checked` distinguishes the failure
 modes via the returned status code and always writes a defined value to
 `*p_ptr` (`NULL` on failure).
 
+### Introspection
+
+```c
+pool_footprint_t pool_footprint(void);
+```
+
+Reports the **static** memory footprint of one pool instance. Every field
+is a compile-time property of the configured pool type, so the call
+allocates nothing, touches no pool, and is safe from any context.
+Useful for a one-line boot/telemetry log or a runtime budget
+cross-check.
+
+Sizes are given in two units. `*_units` fields are \_native storage
+units; what `sizeof` yields on the target (8-bit bytes on
+byte-addressable cores, 16-bit words on a 16-bit-MAU target such as the
+TI C2000). `*_octets` fields normalise that to 8-bit octets, so a
+footprint is directly comparable across platforms.
+
+```c
+pool_footprint_t fp = pool_footprint();
+/* fp.instance_size_octets — total RAM cost of one pool, in octets
+ * fp.payload_units        — usable payload  (POOL_MAX_SLOTS * POOL_ITEM_SIZE)
+ * fp.overhead_units       — status array + cursor + alignment padding
+ * fp.capacity / fp.item_size / fp.addr_unit_bits */
+```
+
+To enforce a budget at compile time, define `POOL_RAM_BUDGET_OCTETS` (see
+Configuration).
+
 ### Types
 
-| Type | Description |
-|---|---|
-| `struct pool_t` | Caller-owned pool instance. Opaque by contract — use the API. |
-| `pool_handle_t` | `struct pool_t *`. Type used at every API boundary. |
-| `pool_id_t` | `uint16_t`. Unique identifier for a slot. |
-| `pool_byte_t` | Storage unit for the raw payload buffer. `uint8_t` on byte-addressable targets, `uint16_t` on `CHAR_BIT == 16` targets (TI C2000). |
-| `pool_align_t` | Strictest alignment honoured by the storage union. `max_align_t` when available, `uint64_t` fallback otherwise. |
-| `pool_status_t` | Return code (see below). |
+| Type               | Description                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `struct pool_t`    | Caller-owned pool instance. Opaque by contract — use the API.                                                                                                            |
+| `pool_handle_t`    | `struct pool_t *`. Type used at every API boundary.                                                                                                                      |
+| `pool_id_t`        | `uint16_t`. Unique identifier for a slot.                                                                                                                                |
+| `pool_byte_t`      | Storage unit for the raw payload buffer. `uint8_t` on byte-addressable targets, `uint16_t` on `CHAR_BIT == 16` targets (TI C2000).                                       |
+| `pool_align_t`     | Strictest alignment honoured by the storage union. `max_align_t` when available, `uint64_t` fallback otherwise.                                                          |
+| `pool_footprint_t` | Static footprint descriptor returned by `pool_footprint()`: instance size (native units and octets), payload, overhead, capacity, item size, and addressable-unit width. |
+| `pool_status_t`    | Return code (see below).                                                                                                                                                 |
 
 ### Error codes
 
-| Code | Value | Meaning |
-|---|---|---|
-| `POOL_OK` | `0` | Operation succeeded |
-| `POOL_ERR_NULL_PTR` | `-1` | A required pointer argument was `NULL` |
-| `POOL_ERR_FULL` | `-2` | No free slots available in the pool |
-| `POOL_ERR_INVALID_ID` | `-3` | ID is out of range or the slot is not currently allocated (also returned for double-free attempts) |
+| Code                  | Value | Meaning                                                                                            |
+| --------------------- | ----- | -------------------------------------------------------------------------------------------------- |
+| `POOL_OK`             | `0`   | Operation succeeded                                                                                |
+| `POOL_ERR_NULL_PTR`   | `-1`  | A required pointer argument was `NULL`                                                             |
+| `POOL_ERR_FULL`       | `-2`  | No free slots available in the pool                                                                |
+| `POOL_ERR_INVALID_ID` | `-3`  | ID is out of range or the slot is not currently allocated (also returned for double-free attempts) |
 
 ## Platform Support
 
@@ -223,20 +254,20 @@ The library works on any toolchain meeting the requirements below.
 There are no chip-specific code paths; the addressing model is
 auto-detected from the standard library headers.
 
-| Requirement | Notes |
-|---|---|
-| C11 toolchain | Uses `_Static_assert`, and `_Atomic` in the default atomicity mode. |
-| `CHAR_BIT == 8` or `CHAR_BIT == 16` | Detected from `<limits.h>`; other values rejected at compile time. |
-| `<stdint.h>` and `<limits.h>` | Standard headers, present on every supported toolchain. |
-| `<stdatomic.h>` *(optional)* | Required only for `POOL_ATOMIC_MODE_C11`. Targets without it (e.g. TI C2000 codegen) must use `POOL_ATOMIC_MODE_VOLATILE`. Auto-selected. |
+| Requirement                         | Notes                                                                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| C11 toolchain                       | Uses `_Static_assert`, and `_Atomic` in the default atomicity mode.                                                                       |
+| `CHAR_BIT == 8` or `CHAR_BIT == 16` | Detected from `<limits.h>`; other values rejected at compile time.                                                                        |
+| `<stdint.h>` and `<limits.h>`       | Standard headers, present on every supported toolchain.                                                                                   |
+| `<stdatomic.h>` _(optional)_        | Required only for `POOL_ATOMIC_MODE_C11`. Targets without it (e.g. TI C2000 codegen) must use `POOL_ATOMIC_MODE_VOLATILE`. Auto-selected. |
 
 ### Validated configurations
 
-| Toolchain | Target | Atomicity | Status |
-|---|---|---|---|
-| GCC, Clang | x86_64 Linux | `c11` | Host tests |
-| GCC, Clang | x86_64 Linux | `volatile` | Host tests (covers the C2000 atomicity path) |
-| TI C2000 CGT 25.11 LTS | TI C2000 family (16-bit MAU) | `volatile` (auto) | Library cross-build |
+| Toolchain              | Target                       | Atomicity         | Status                                       |
+| ---------------------- | ---------------------------- | ----------------- | -------------------------------------------- |
+| GCC, Clang             | x86_64 Linux                 | `c11`             | Host tests                                   |
+| GCC, Clang             | x86_64 Linux                 | `volatile`        | Host tests (covers the C2000 atomicity path) |
+| TI C2000 CGT 25.11 LTS | TI C2000 family (16-bit MAU) | `volatile` (auto) | Library cross-build                          |
 
 ### 16-bit-MAU specifics
 
@@ -277,11 +308,11 @@ pattern (dead-store-elimination prevention); it is unrelated to the
 
 ## Notes
 
-| Topic | Note |
-|---|---|
-| **Memory** | All storage is static. Verify `POOL_MAX_SLOTS * POOL_ITEM_SIZE` fits your BSS budget. |
-| **Threading** | Single-writer / many-readers per pool instance. Two writer contexts that share a pool must be serialised by the caller. |
-| **Double-free protection** | `pool_release()` verifies slot state before freeing; returns `POOL_ERR_INVALID_ID` on double-free attempts and on uninitialised slot state. |
-| **WCET** | Worst-case allocation scan equals `POOL_MAX_SLOTS` iterations. Bounded and deterministic. |
-| **Pointer alignment** | Base storage is aligned to `pool_align_t`; `POOL_ITEM_SIZE` must be a multiple of that alignment (enforced by `_Static_assert`). |
-| **Version header** | `pool_version.h` is auto-generated by the Meson build and installed as `<pool/pool_version.h>`. |
+| Topic                      | Note                                                                                                                                                                                                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Memory**                 | All storage is static. Use `sizeof(struct pool_t)` (or `pool_footprint()`) to size your BSS budget — it includes the status array and alignment padding, not just the `POOL_MAX_SLOTS * POOL_ITEM_SIZE` payload. Define `POOL_RAM_BUDGET_OCTETS` to enforce a ceiling at compile time. |
+| **Threading**              | Single-writer / many-readers per pool instance. Two writer contexts that share a pool must be serialised by the caller.                                                                                                                                                                |
+| **Double-free protection** | `pool_release()` verifies slot state before freeing; returns `POOL_ERR_INVALID_ID` on double-free attempts and on uninitialised slot state.                                                                                                                                            |
+| **WCET**                   | Worst-case allocation scan equals `POOL_MAX_SLOTS` iterations. Bounded and deterministic.                                                                                                                                                                                              |
+| **Pointer alignment**      | Base storage is aligned to `pool_align_t`; `POOL_ITEM_SIZE` must be a multiple of that alignment (enforced by `_Static_assert`).                                                                                                                                                       |
+| **Version header**         | `pool_version.h` is auto-generated by the Meson build and installed as `<pool/pool_version.h>`.                                                                                                                                                                                        |

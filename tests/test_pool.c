@@ -517,6 +517,48 @@ test_pool_no_overlap(void)
         return 0;
 }
 
+/** Test 16: Verify the static footprint descriptor is self-consistent */
+static int
+test_pool_footprint(void)
+{
+        pool_footprint_t fp = pool_footprint();
+
+        /* Compile-time properties must be reported verbatim. */
+        if (fp.capacity != (pool_id_t)POOL_MAX_SLOTS) {
+                return 1;
+        }
+        if (fp.item_size != (uint16_t)POOL_ITEM_SIZE) {
+                return 1;
+        }
+        if (fp.addr_unit_bits != (uint8_t)POOL_ADDR_UNIT_BITS) {
+                return 1;
+        }
+
+        /* Instance size must match sizeof and the payload macro. */
+        if (fp.instance_size_units != sizeof(struct pool_t)) {
+                return 1;
+        }
+        if (fp.payload_units != POOL_PAYLOAD_UNITS) {
+                return 1;
+        }
+
+        /* Payload fits inside the instance; overhead is the remainder. */
+        if (fp.payload_units > fp.instance_size_units) {
+                return 1;
+        }
+        if (fp.overhead_units != (fp.instance_size_units - fp.payload_units)) {
+                return 1;
+        }
+
+        /* Octet normalisation: identity on 8-bit, x2 on 16-bit MAU. */
+        if (fp.instance_size_octets
+            != fp.instance_size_units * ((size_t)POOL_ADDR_UNIT_BITS / 8U)) {
+                return 1;
+        }
+
+        return 0;
+}
+
 /* =========================================================================
  * Entry point
  * ========================================================================= */
@@ -524,7 +566,7 @@ test_pool_no_overlap(void)
 int
 main(void)
 {
-        printf("Running %d unit tests...\n\n", 15);
+        printf("Running %d unit tests...\n\n", 16);
 
         RUN_TEST(test_pool_init);
         RUN_TEST(test_pool_init_null_ptr);
@@ -541,6 +583,7 @@ main(void)
         RUN_TEST(test_pool_alignment);
         RUN_TEST(test_pool_release_clears_memory);
         RUN_TEST(test_pool_no_overlap);
+        RUN_TEST(test_pool_footprint);
 
         printf("\n%d/%d tests passed.\n", g_tests_run - g_tests_failed,
                g_tests_run);

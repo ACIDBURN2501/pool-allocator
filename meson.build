@@ -1,7 +1,7 @@
 project(
   'pool_allocator',
   'c',
-  version: '2.0.0',
+  version: '2.1.0',
   default_options: [
     'c_std=c11',
     'warning_level=3',
