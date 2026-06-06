@@ -1,5 +1,5 @@
 /**
- * @copyright MIT Licence
+ * SPDX-License-Identifier: MIT
  *
  * @file: pool_conf.h
  *

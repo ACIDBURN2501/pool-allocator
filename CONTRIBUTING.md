@@ -1,4 +1,4 @@
-# Contributing to pool
+# Contributing to pool-allocator
 
 pool is a small C library providing a static object pool allocator for
 safety-critical systems. It is designed to be safe to drop into deeply
@@ -101,7 +101,7 @@ it that way.
 - Run the host suite with ASan + UBSan before submitting.
 - CI also gates on `cppcheck` (warning + style + performance + portability)
   and on `valgrind memcheck` (leak-check full, errors-for-leak-kinds=all,
-  built without sanitizers because ASan and Valgrind are incompatible).
+  built without sanitisers because ASan and Valgrind are incompatible).
   New findings must either be fixed or silenced with a justified inline
   `/* cppcheck-suppress <id> */` marker.
 
@@ -114,7 +114,7 @@ cppcheck --enable=warning,style,performance,portability --error-exitcode=1 \
          --suppress=missingIncludeSystem --suppress=unusedFunction \
          -I include src/ include/
 
-# Memcheck (debug build with NO sanitizers)
+# Memcheck (debug build with NO sanitisers)
 meson setup build_mem --buildtype=debug -Dbuild_tests=true
 meson compile -C build_mem
 meson test -C build_mem --verbose \
