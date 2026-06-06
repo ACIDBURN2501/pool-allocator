@@ -1,6 +1,6 @@
 # pool-allocator
 
-[![CI](https://github.com/ACIDBURN2501/pool_allocator/actions/workflows/ci.yml/badge.svg)](https://github.com/ACIDBURN2501/pool_allocator/actions/workflows/ci.yml)
+[![CI](https://github.com/aajll/pool-allocator/actions/workflows/ci.yml/badge.svg)](https://github.com/aajll/pool-allocator/actions/workflows/ci.yml)
 
 A static object pool allocator in C for safety-critical embedded systems.
 
